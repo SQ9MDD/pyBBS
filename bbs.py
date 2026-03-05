@@ -1033,6 +1033,33 @@ def _store_topology_for_source(src: str, neighbors: list[str], via_neighbor: str
     con.close()
 
 
+def _replace_topology_edges_via(via_neighbor: str, edges: list[tuple[str, str]]):
+    via_n = normalize_bbs_name(via_neighbor)
+    if not via_n:
+        return
+    now = now_iso()
+    clean_edges = sorted({
+        (normalize_bbs_name(src), normalize_bbs_name(dst))
+        for src, dst in edges
+        if normalize_bbs_name(src) and normalize_bbs_name(dst) and normalize_bbs_name(src) != normalize_bbs_name(dst)
+    })
+    con = db()
+    con.execute("DELETE FROM topology_edges WHERE via_neighbor = ?", (via_n,))
+    for src_n, dst_n in clean_edges:
+        con.execute(
+            """
+            INSERT INTO topology_edges(src, dst, cost, seen_at, via_neighbor)
+            VALUES (?, ?, 1, ?, ?)
+            ON CONFLICT(src, dst, via_neighbor) DO UPDATE SET
+                cost = 1,
+                seen_at = excluded.seen_at
+            """,
+            (src_n, dst_n, now, via_n),
+        )
+    con.commit()
+    con.close()
+
+
 def refresh_local_topology():
     _store_topology_for_source(LOCAL_BBS_NAME, netinfo_neighbors(), LOCAL_BBS_NAME)
 
@@ -1096,6 +1123,38 @@ def _topology_graph() -> dict[str, set[str]]:
         graph.setdefault(src, set()).add(dst)
         graph.setdefault(dst, set()).add(src)
     return graph
+
+
+def topology_edges_for_netinfo() -> list[tuple[str, str]]:
+    ttl_sec = max(60, int(CFG.topology_edge_ttl_sec))
+    cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=ttl_sec)).isoformat(timespec="seconds")
+    con = db()
+    try:
+        rows = con.execute(
+            "SELECT src, dst, via_neighbor FROM topology_edges WHERE seen_at >= ?",
+            (cutoff,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        con.close()
+        return []
+    con.close()
+
+    nstatus = neighbor_status_map()
+    down_neighbors = {
+        n for n, st in nstatus.items()
+        if (st["state"] or "").upper() == "DOWN"
+    }
+    out: set[tuple[str, str]] = set()
+    for r in rows:
+        via = normalize_bbs_name(r["via_neighbor"] or "")
+        if via in down_neighbors:
+            continue
+        src = normalize_bbs_name(r["src"] or "")
+        dst = normalize_bbs_name(r["dst"] or "")
+        if not src or not dst or src == dst:
+            continue
+        out.add((src, dst))
+    return sorted(out)
 
 
 def select_next_hop(dest_bbs: str, visited_nodes: set[str] | None = None) -> tuple[str | None, str]:
@@ -1313,14 +1372,12 @@ def topology_links_list() -> str:
     """).fetchall()
     con.close()
 
-    # Aggregate directional observations into undirected physical links.
     links: dict[tuple[str, str], dict[str, object]] = {}
     for r in rows:
         src = normalize_bbs_name(r["src"] or "")
         dst = normalize_bbs_name(r["dst"] or "")
         if not src or not dst or src == dst:
             continue
-        a, b = (src, dst) if src <= dst else (dst, src)
         via = normalize_bbs_name(r["via_neighbor"] or "")
         seen = parse_iso_dt(r["seen_at"])
         if via in down_neighbors:
@@ -1333,17 +1390,17 @@ def topology_links_list() -> str:
             age_sec = int((now - seen).total_seconds())
             row_status = "ACTIVE" if age_sec <= ttl_sec else "DEAD"
 
-        key = (a, b)
+        key = (src, dst)
         cur = links.get(key)
         if cur is None or age_sec < int(cur["age_sec"]):
             links[key] = {"age_sec": age_sec, "status": row_status}
 
     table_rows = []
-    for (a, b), meta in sorted(links.items(), key=lambda it: (it[0][0], it[0][1])):
-        table_rows.append([a, b, fmt_age_short(int(meta["age_sec"])), str(meta["status"])])
+    for (src, dst), meta in sorted(links.items(), key=lambda it: (it[0][0], it[0][1])):
+        table_rows.append([src, dst, fmt_age_short(int(meta["age_sec"])), str(meta["status"])])
     return _ui_table(
         "TOPOLOGY LINKS",
-        ["NODE_A", "NODE_B", "AGE", "STATUS"],
+        ["FROM", "TO", "AGE", "STATUS"],
         [16, 16, 8, 8],
         table_rows,
         "No topology links yet.",
@@ -2161,6 +2218,8 @@ async def handle_forward_session(reader: asyncio.StreamReader, writer: asyncio.S
             await fwd_send_line(writer, f"NODE:{LOCAL_BBS_NAME}")
             for nei_name in sorted(netinfo_neighbors()):
                 await fwd_send_line(writer, f"NEI:{nei_name}")
+            for src, dst in topology_edges_for_netinfo():
+                await fwd_send_line(writer, f"EDGE:{src},{dst}")
             await fwd_send_line(writer, f"{FORWARD_PROTO} END")
             continue
 
@@ -2267,9 +2326,10 @@ async def _fwd_read_bid_list(reader: asyncio.StreamReader) -> set[str]:
     return out
 
 
-async def _fwd_read_netinfo(reader: asyncio.StreamReader) -> tuple[str | None, list[str]]:
+async def _fwd_read_netinfo(reader: asyncio.StreamReader) -> tuple[str | None, list[str], list[tuple[str, str]]]:
     node: str | None = None
     neighbors: list[str] = []
+    edges: list[tuple[str, str]] = []
     while True:
         line = await fwd_read_line(reader, CFG.forward_session_timeout_sec)
         if line is None:
@@ -2283,7 +2343,16 @@ async def _fwd_read_netinfo(reader: asyncio.StreamReader) -> tuple[str | None, l
             nei = normalize_bbs_name(line[4:].strip())
             if nei:
                 neighbors.append(nei)
-    return node, sorted(set(neighbors))
+            continue
+        if line.startswith("EDGE:"):
+            raw = line[5:].strip()
+            if "," in raw:
+                src_raw, dst_raw = raw.split(",", 1)
+                src = normalize_bbs_name(src_raw)
+                dst = normalize_bbs_name(dst_raw)
+                if src and dst and src != dst:
+                    edges.append((src, dst))
+    return node, sorted(set(neighbors)), sorted(set(edges))
 
 
 async def forward_connect_and_push(neighbor: dict):
@@ -2316,8 +2385,11 @@ async def forward_connect_and_push(neighbor: dict):
         mark_neighbor_ok(nname, int((time.monotonic() - t0) * 1000))
 
         await fwd_send_line(writer, f"{FORWARD_PROTO} NETINFO")
-        node_name, node_neighbors = await _fwd_read_netinfo(reader)
-        _store_topology_for_source(node_name or nname, node_neighbors, nname)
+        node_name, node_neighbors, node_edges = await _fwd_read_netinfo(reader)
+        if node_edges:
+            _replace_topology_edges_via(nname, node_edges)
+        else:
+            _store_topology_for_source(node_name or nname, node_neighbors, nname)
 
         remote_p_bids: set[str] = set()
         remote_b_bids: set[str] = set()
