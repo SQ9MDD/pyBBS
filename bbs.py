@@ -64,6 +64,7 @@ class BBSConfig:
     bulletin_retention_days: int = 60
     outbox_retention_days: int = 14
     topology_edge_ttl_sec: int = 1800
+    topology_edge_retention_sec: int = 86400
 
     def __post_init__(self):
         if self.scopes is None:
@@ -100,6 +101,7 @@ def _default_config_dict() -> dict:
         "bulletin_retention_days": 60,
         "outbox_retention_days": 14,
         "topology_edge_ttl_sec": 1800,
+        "topology_edge_retention_sec": 86400,
     }
 
 
@@ -263,6 +265,25 @@ def fmt_user_dt(value: str | None) -> str:
         return raw.replace("T", " ")[:16]
 
 
+def parse_iso_dt(value: str | None) -> datetime.datetime | None:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def fmt_age_short(seconds: int) -> str:
+    sec = max(0, int(seconds))
+    if sec < 60:
+        return f"{sec}s"
+    if sec < 3600:
+        return f"{sec // 60}m{sec % 60:02d}s"
+    return f"{sec // 3600}h{(sec % 3600) // 60:02d}m"
+
+
 def _ui_fit(text: str, width: int) -> str:
     s = str(text or "")
     if width <= 0:
@@ -330,6 +351,8 @@ def help_text() -> str:
         "[ OTHER ]",
         "J/MH/MHEARD/H    Heard list",
         "CONNECTION       List configured neighbors (CONNECTED/CONN)",
+        "TOPOLOGY         Show topology links + routes",
+        "TOPOLOGY PRUNE <minutes>  Delete links older than minutes",
         "USERS            List registered users",
         "C/T/TALK         Convers mode",
         "/WHO             Convers users",
@@ -814,12 +837,26 @@ def cleanup_retention():
                 (o_cutoff,),
             )
 
-        ttl_sec = max(60, int(CFG.topology_edge_ttl_sec))
-        t_cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=ttl_sec)).isoformat(timespec="seconds")
+        keep_sec = max(
+            max(60, int(CFG.topology_edge_ttl_sec)),
+            int(getattr(CFG, "topology_edge_retention_sec", 86400) or 86400),
+        )
+        t_cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=keep_sec)).isoformat(timespec="seconds")
         con.execute("DELETE FROM topology_edges WHERE seen_at < ?", (t_cutoff,))
         con.commit()
     finally:
         con.close()
+
+
+def prune_topology_edges_older_than(seconds: int) -> int:
+    keep_sec = max(0, int(seconds))
+    cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=keep_sec)).isoformat(timespec="seconds")
+    con = db()
+    cur = con.execute("DELETE FROM topology_edges WHERE seen_at < ?", (cutoff,))
+    deleted = int(cur.rowcount if cur.rowcount is not None else 0)
+    con.commit()
+    con.close()
+    return deleted
 
 
 def mark_neighbor_ok(neighbor_name: str, rtt_ms: int):
@@ -1142,7 +1179,59 @@ def connections_list() -> str:
         route_rows,
         "No discovered routes yet.",
     )
-    return direct + topo
+    return direct + topology_links_list() + topo
+
+
+def topology_links_list() -> str:
+    ttl_sec = max(60, int(CFG.topology_edge_ttl_sec))
+    now = datetime.datetime.now(datetime.timezone.utc)
+    con = db()
+    rows = con.execute("""
+        SELECT src, dst, via_neighbor, seen_at
+        FROM topology_edges
+        ORDER BY seen_at DESC, src ASC, dst ASC
+    """).fetchall()
+    con.close()
+
+    table_rows = []
+    for r in rows:
+        seen = parse_iso_dt(r["seen_at"])
+        if not seen:
+            age_sec = 0
+            status = "UNK"
+        else:
+            age_sec = int((now - seen).total_seconds())
+            status = "ACTIVE" if age_sec <= ttl_sec else "DEAD"
+        table_rows.append([
+            normalize_bbs_name(r["src"] or ""),
+            normalize_bbs_name(r["dst"] or ""),
+            normalize_bbs_name(r["via_neighbor"] or ""),
+            fmt_age_short(age_sec),
+            status,
+        ])
+    return _ui_table(
+        "TOPOLOGY LINKS",
+        ["SRC", "DST", "VIA", "AGE", "STATUS"],
+        [12, 12, 12, 8, 8],
+        table_rows,
+        "No topology links yet.",
+    )
+
+
+def topology_overview() -> str:
+    routes = route_map()
+    route_rows = []
+    for dest in sorted(routes.keys()):
+        r = routes[dest]
+        route_rows.append([dest, r["next_hop"], str(r["hops"]), r["path"]])
+    topo_routes = _ui_table(
+        "TOPOLOGY ROUTES",
+        ["DEST", "NEXT_HOP", "HOPS", "PATH"],
+        [12, 12, 4, 43],
+        route_rows,
+        "No discovered routes yet.",
+    )
+    return topology_links_list() + topo_routes
 
 
 def users_list() -> str:
@@ -2258,6 +2347,21 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 
             if cmd in ("CONNECTION", "CONNECTIONS"):
                 await send(writer, connections_list())
+                continue
+
+            if cmd == "TOPOLOGY":
+                if len(parts) >= 2 and parts[1].upper() == "PRUNE":
+                    if len(parts) < 3 or not parts[2].isdigit():
+                        await send(writer, "Usage: TOPOLOGY PRUNE <minutes>\r\n")
+                        continue
+                    minutes = int(parts[2])
+                    if minutes < 0:
+                        await send(writer, "Minutes must be >= 0.\r\n")
+                        continue
+                    deleted = prune_topology_edges_older_than(minutes * 60)
+                    await send(writer, f"Pruned {deleted} topology link(s) older than {minutes} minute(s).\r\n")
+                    continue
+                await send(writer, topology_overview())
                 continue
 
             if cmd == "USERS":

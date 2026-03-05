@@ -70,7 +70,8 @@ Przykład:
   "forward_backfill_max_per_session": 200,
   "bulletin_retention_days": 60,
   "outbox_retention_days": 14,
-  "topology_edge_ttl_sec": 1800
+  "topology_edge_ttl_sec": 1800,
+  "topology_edge_retention_sec": 86400
 }
 ```
 
@@ -78,9 +79,13 @@ Przykład:
 
 - `CONNECTION` pokazuje:
 - sąsiadów z configa (`HOST/PORT`, `UP/DOWN`, `RTT`, kolejki)
+- linki topologii (`SRC`, `DST`, `VIA`, `AGE`, `STATUS=ACTIVE/DEAD`)
 - wyliczone trasy (`DEST`, `NEXT_HOP`, `HOPS`, `PATH`)
 - koszt trasy = liczba hopów
 - topologia odświeża się cyklicznie przez wymianę `NETINFO`
+- `topology_edge_ttl_sec` określa granicę ACTIVE/DEAD
+- `topology_edge_retention_sec` określa jak długo trzymać stare wpisy topologii
+- `TOPOLOGY PRUNE <minutes>` usuwa ręcznie linki starsze niż podany wiek
 
 ### Zachowanie przy błędach odbiorcy
 
@@ -94,7 +99,7 @@ Przykład:
 - ogólne: `HELP`, `WHO`, `MOTD`, `INFO`, `Q`, `BYE`
 - poczta: `L`, `LM`, `N`, `R`, `RM`, `RN`, `S`, `SP`, `RE`, `K`, `KM`, `LS`
 - biuletyny: `B`, `LB`, `RB`, `SB`
-- inne: `J`, `MH`, `MHEARD`, `H`, `CONNECTION`, `CONNECTED`, `CONN`, `USERS`, `C`, `T`, `TALK`, `/WHO`, `/EX`
+- inne: `J`, `MH`, `MHEARD`, `H`, `CONNECTION`, `CONNECTED`, `CONN`, `TOPOLOGY`, `TOPOLOGY PRUNE <minutes>`, `USERS`, `C`, `T`, `TALK`, `/WHO`, `/EX`
 
 ### Pliki
 
@@ -148,9 +153,13 @@ See the JSON example in the PL section above (same fields/values apply).
 
 - `CONNECTION` shows:
 - configured direct neighbors (host/port/state/queue)
+- topology links (`SRC`, `DST`, `VIA`, `AGE`, `STATUS=ACTIVE/DEAD`)
 - discovered routes (`DEST`, `NEXT_HOP`, `HOPS`, `PATH`)
 - route cost is hop count
 - topology is refreshed periodically via `NETINFO` exchange
+- `topology_edge_ttl_sec` defines ACTIVE/DEAD threshold
+- `topology_edge_retention_sec` defines how long stale topology links are retained
+- `TOPOLOGY PRUNE <minutes>` manually deletes links older than given age
 
 ### Unknown recipient behavior
 
@@ -164,7 +173,7 @@ See the JSON example in the PL section above (same fields/values apply).
 - general: `HELP`, `WHO`, `MOTD`, `INFO`, `Q`, `BYE`
 - mail: `L`, `LM`, `N`, `R`, `RM`, `RN`, `S`, `SP`, `RE`, `K`, `KM`, `LS`
 - bulletins: `B`, `LB`, `RB`, `SB`
-- other: `J`, `MH`, `MHEARD`, `H`, `CONNECTION`, `CONNECTED`, `CONN`, `USERS`, `C`, `T`, `TALK`, `/WHO`, `/EX`
+- other: `J`, `MH`, `MHEARD`, `H`, `CONNECTION`, `CONNECTED`, `CONN`, `TOPOLOGY`, `TOPOLOGY PRUNE <minutes>`, `USERS`, `C`, `T`, `TALK`, `/WHO`, `/EX`
 
 ### Notes
 
