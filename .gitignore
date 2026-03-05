@@ -1,3 +1,5 @@
 bbs.sqlite
 bbs_config.json
 welcome.txt
+__pycache__/bbs.cpython-314.pyc
+.DS_Store

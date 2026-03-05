@@ -287,6 +287,8 @@ HELP = (
     "\r\n"
     "Other:\r\n"
     "J or MH or MHEARD or H - heard list\r\n"
+    "CONNECTION - list configured neighbors\r\n"
+    "USERS - list registered users\r\n"
     "C or T or TALK - convers mode\r\n"
     "/EX - leave convers\r\n"
     "/WHO - convers users\r\n"
@@ -626,6 +628,59 @@ def heard_list(limit: int) -> str:
     out = ["HEARD LIST\r\n", "CALLSIGN CONN LAST_SEEN FIRST_SEEN\r\n"]
     for r in rows:
         out.append(f"{r['callsign']} {r['connects']} {r['last_seen']} {r['first_seen']}\r\n")
+    return "".join(out)
+
+
+def connections_list() -> str:
+    neighbors = sorted(NEIGHBORS_BY_NAME.values(), key=lambda n: n["name"])
+    if not neighbors:
+        return "No connections defined.\r\n"
+
+    con = db()
+    stats_rows = con.execute("""
+        SELECT neighbor_name, status, COUNT(*) AS c
+        FROM outbox
+        GROUP BY neighbor_name, status
+    """).fetchall()
+    con.close()
+
+    stats: dict[str, dict[str, int]] = {}
+    for r in stats_rows:
+        nname = normalize_bbs_name(r["neighbor_name"] or "")
+        if not nname:
+            continue
+        bucket = stats.setdefault(nname, {"queued": 0, "failed": 0})
+        st = (r["status"] or "").lower()
+        if st == "queued":
+            bucket["queued"] += int(r["c"])
+        if st == "failed":
+            bucket["failed"] += int(r["c"])
+
+    out = ["CONNECTIONS\r\n", "NAME HOST PORT EN QUEUED FAILED\r\n"]
+    for n in neighbors:
+        nstats = stats.get(n["name"], {"queued": 0, "failed": 0})
+        enabled = "Y" if n.get("enabled") else "N"
+        out.append(
+            f"{n['name']} {n['host']} {n['port']} {enabled} {nstats['queued']} {nstats['failed']}\r\n"
+        )
+    return "".join(out)
+
+
+def users_list() -> str:
+    con = db()
+    rows = con.execute("""
+        SELECT callsign, name, created_at
+        FROM users
+        ORDER BY callsign ASC
+    """).fetchall()
+    con.close()
+
+    if not rows:
+        return "No registered users.\r\n"
+
+    out = ["USERS\r\n", "CALLSIGN NAME CREATED_AT\r\n"]
+    for r in rows:
+        out.append(f"{r['callsign']} {normalize_name(r['name'] or '', r['callsign'])} {r['created_at']}\r\n")
     return "".join(out)
 
 
@@ -1592,6 +1647,14 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 
             if cmd == "J":
                 await send(writer, heard_list(CFG.heard_limit))
+                continue
+
+            if cmd in ("CONNECTION", "CONNECTIONS"):
+                await send(writer, connections_list())
+                continue
+
+            if cmd == "USERS":
+                await send(writer, users_list())
                 continue
 
             if cmd == "L":
