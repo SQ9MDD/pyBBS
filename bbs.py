@@ -804,28 +804,7 @@ def refresh_local_topology():
 
 
 def route_map() -> dict[str, dict]:
-    ttl_sec = max(60, int(CFG.topology_edge_ttl_sec))
-    cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=ttl_sec)).isoformat(timespec="seconds")
-    con = db()
-    try:
-        rows = con.execute(
-            "SELECT src, dst FROM topology_edges WHERE seen_at >= ?",
-            (cutoff,),
-        ).fetchall()
-    except sqlite3.OperationalError:
-        con.close()
-        return {}
-    con.close()
-
-    graph: dict[str, set[str]] = {}
-    for r in rows:
-        src = normalize_bbs_name(r["src"] or "")
-        dst = normalize_bbs_name(r["dst"] or "")
-        if not src or not dst:
-            continue
-        graph.setdefault(src, set()).add(dst)
-        graph.setdefault(dst, set()).add(src)
-
+    graph = _topology_graph()
     origin = normalize_bbs_name(LOCAL_BBS_NAME)
     if not origin:
         return {}
@@ -849,6 +828,91 @@ def route_map() -> dict[str, dict]:
             "path": ",".join(path),
         }
     return out
+
+
+def _topology_graph() -> dict[str, set[str]]:
+    ttl_sec = max(60, int(CFG.topology_edge_ttl_sec))
+    cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=ttl_sec)).isoformat(timespec="seconds")
+    con = db()
+    try:
+        rows = con.execute(
+            "SELECT src, dst FROM topology_edges WHERE seen_at >= ?",
+            (cutoff,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        con.close()
+        return {}
+    con.close()
+
+    graph: dict[str, set[str]] = {}
+    for r in rows:
+        src = normalize_bbs_name(r["src"] or "")
+        dst = normalize_bbs_name(r["dst"] or "")
+        if not src or not dst:
+            continue
+        graph.setdefault(src, set()).add(dst)
+        graph.setdefault(dst, set()).add(src)
+    return graph
+
+
+def select_next_hop(dest_bbs: str, visited_nodes: set[str] | None = None) -> tuple[str | None, str]:
+    """
+    Returns (next_hop, reason). reason is one of:
+    - ok
+    - bad_dest
+    - no_route
+    - loop
+    """
+    dest = normalize_bbs_name(dest_bbs)
+    origin = normalize_bbs_name(LOCAL_BBS_NAME)
+    if not dest or not origin or dest == origin:
+        return None, "bad_dest"
+
+    visited = {normalize_bbs_name(v) for v in (visited_nodes or set()) if normalize_bbs_name(v)}
+    if dest in visited:
+        return None, "loop"
+    enabled = {n["name"] for n in enabled_neighbors()}
+
+    # Direct route first.
+    if dest in enabled:
+        if dest in visited:
+            return None, "loop"
+        return dest, "ok"
+
+    graph = _topology_graph()
+    q = deque([origin])
+    prev: dict[str, str | None] = {origin: None}
+
+    while q:
+        cur = q.popleft()
+        if cur == dest:
+            break
+        for nxt in sorted(graph.get(cur, set())):
+            if nxt in prev:
+                continue
+            if nxt in visited and nxt != dest:
+                continue
+            prev[nxt] = cur
+            q.append(nxt)
+
+    if dest not in prev:
+        return None, "no_route"
+
+    # Reconstruct path and pick next hop.
+    path: list[str] = []
+    p = dest
+    while p is not None:
+        path.append(p)
+        p = prev.get(p)
+    path.reverse()
+    if len(path) < 2:
+        return None, "no_route"
+    next_hop = path[1]
+    if next_hop in visited:
+        return None, "loop"
+    if next_hop not in enabled:
+        return None, "no_route"
+    return next_hop, "ok"
 
 
 def neighbor_status_map() -> dict[str, sqlite3.Row]:
@@ -1380,6 +1444,12 @@ async def send_private_interactive(reader, writer, sess: Session, to_default: st
     to, subj, body = composed
     recipient, recipient_bbs = parse_recipient_target(to)
     is_remote = bool(recipient_bbs and recipient_bbs != LOCAL_BBS_NAME)
+    next_hop: str | None = None
+    if is_remote:
+        next_hop, reason = select_next_hop(recipient_bbs, _split_path_nodes(LOCAL_BBS_NAME))
+        if not next_hop:
+            await send(writer, f"No route to {recipient_bbs} ({reason}).\r\n")
+            return
     sender_for_store = f"{sess.callsign}@{LOCAL_BBS_NAME}" if is_remote else sess.callsign
 
     bid = make_bid(sess.callsign)
@@ -1390,23 +1460,13 @@ async def send_private_interactive(reader, writer, sess: Session, to_default: st
     """, (bid, sender_for_store, recipient, recipient_bbs, subj[:80], body, LOCAL_BBS_NAME, now_iso()))
     mid = con.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
     if is_remote:
-        neighbor = NEIGHBORS_BY_NAME.get(recipient_bbs)
-        if neighbor and neighbor.get("enabled"):
-            con.execute(
-                """
-                INSERT INTO outbox(msg_id, neighbor_name, status, last_try_at, try_count, last_error, created_at)
-                VALUES (?, ?, 'queued', NULL, 0, '', ?)
-                """,
-                (mid, recipient_bbs, now_iso()),
-            )
-        else:
-            con.execute(
-                """
-                INSERT INTO outbox(msg_id, neighbor_name, status, last_try_at, try_count, last_error, created_at)
-                VALUES (?, ?, 'failed', ?, 1, ?, ?)
-                """,
-                (mid, recipient_bbs or "", now_iso(), "unknown or disabled neighbor", now_iso()),
-            )
+        con.execute(
+            """
+            INSERT INTO outbox(msg_id, neighbor_name, status, last_try_at, try_count, last_error, created_at)
+            VALUES (?, ?, 'queued', NULL, 0, '', ?)
+            """,
+            (mid, next_hop, now_iso()),
+        )
     else:
         con.execute("INSERT INTO inbox(callsign, msg_id, is_read, created_at) VALUES (?, ?, 0, ?)", (recipient, mid, now_iso()))
     con.commit()
@@ -1640,18 +1700,32 @@ def _store_forward_message(fields: dict[str, str], body: str) -> tuple[bool, str
 
     relay_neighbors: list[str] = []
     if msg_type == "P":
+        full_path = _path_append(path, LOCAL_BBS_NAME)
+        next_hop: str | None = None
         if recipient_bbs and recipient_bbs != LOCAL_BBS_NAME:
-            con.close()
-            return False, "wrong_tobbs"
+            visited = _split_path_nodes(full_path)
+            next_hop, reason = select_next_hop(recipient_bbs, visited)
+            if not next_hop:
+                con.close()
+                return False, f"route:{reason}"
         con.execute(
             """
             INSERT INTO messages(bid, msg_type, scope, sender, recipient, recipient_bbs, subject, body, path, created_at)
             VALUES (?, 'P', NULL, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (bid, sender, recipient, recipient_bbs or None, subject, body, _path_append(path, LOCAL_BBS_NAME), created_at),
+            (bid, sender, recipient, recipient_bbs or None, subject, body, full_path, created_at),
         )
         mid = con.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
-        con.execute("INSERT INTO inbox(callsign, msg_id, is_read, created_at) VALUES (?, ?, 0, ?)", (recipient, mid, now_iso()))
+        if not recipient_bbs or recipient_bbs == LOCAL_BBS_NAME:
+            con.execute("INSERT INTO inbox(callsign, msg_id, is_read, created_at) VALUES (?, ?, 0, ?)", (recipient, mid, now_iso()))
+        else:
+            con.execute(
+                """
+                INSERT INTO outbox(msg_id, neighbor_name, status, last_try_at, try_count, last_error, created_at)
+                VALUES (?, ?, 'queued', NULL, 0, '', ?)
+                """,
+                (mid, next_hop, now_iso()),
+            )
     else:
         con.execute(
             """
