@@ -613,6 +613,95 @@ def bid_exists(con: sqlite3.Connection, bid: str) -> bool:
     return row is not None
 
 
+def user_exists(callsign: str) -> bool:
+    cs = normalize_callsign(callsign)
+    if not cs:
+        return False
+    con = db()
+    row = con.execute("SELECT 1 FROM users WHERE callsign = ? LIMIT 1", (cs,)).fetchone()
+    con.close()
+    return row is not None
+
+
+def _queue_private_message(sender: str, recipient: str, recipient_bbs: str | None, subject: str, body: str, path: str | None = None) -> tuple[int | None, str]:
+    rcpt = normalize_callsign(recipient)
+    rbbs = normalize_bbs_name(recipient_bbs or "")
+    subj = (subject or "(no subject)").strip()[:80]
+    msg_body = (body or "").strip() or "(empty)"
+    sender_n = normalize_sender_address(sender)
+    if not sender_n or not rcpt:
+        return None, "bad_addr"
+
+    is_remote = bool(rbbs and rbbs != LOCAL_BBS_NAME)
+    if not is_remote and not user_exists(rcpt):
+        return None, "no_such_user"
+
+    msg_path = _path_append(path or "", LOCAL_BBS_NAME)
+    con = db()
+    bid = make_bid("MAILER")
+    con.execute(
+        """
+        INSERT INTO messages(bid, msg_type, scope, sender, recipient, recipient_bbs, subject, body, path, created_at)
+        VALUES (?, 'P', NULL, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (bid, sender_n, rcpt, rbbs or None, subj, msg_body, msg_path, now_iso()),
+    )
+    mid = con.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+
+    if not is_remote:
+        con.execute(
+            "INSERT INTO inbox(callsign, msg_id, is_read, created_at) VALUES (?, ?, 0, ?)",
+            (rcpt, mid, now_iso()),
+        )
+    else:
+        next_hop, reason = select_next_hop(rbbs, _split_path_nodes(msg_path))
+        if next_hop:
+            con.execute(
+                """
+                INSERT INTO outbox(msg_id, neighbor_name, status, last_try_at, try_count, last_error, created_at)
+                VALUES (?, ?, 'queued', NULL, 0, '', ?)
+                """,
+                (mid, next_hop, now_iso()),
+            )
+        else:
+            con.execute(
+                """
+                INSERT INTO outbox(msg_id, neighbor_name, status, last_try_at, try_count, last_error, created_at)
+                VALUES (?, ?, 'failed', ?, 1, ?, ?)
+                """,
+                (mid, rbbs, now_iso(), f"route:{reason}", now_iso()),
+            )
+    con.commit()
+    con.close()
+    return int(mid), "ok"
+
+
+def queue_ndn_for_message(msg_row: sqlite3.Row, reason: str):
+    sender_addr = normalize_sender_address(msg_row["sender"] or "")
+    if not sender_addr:
+        return
+    if sender_addr.startswith("MAILER-DAEMON@"):
+        return
+    subj = (msg_row["subject"] or "").strip()
+    if subj.upper().startswith("NDN:"):
+        return
+
+    rcpt_user, rcpt_bbs = parse_recipient_target(sender_addr)
+    if not rcpt_user:
+        return
+    ndn_sender = f"MAILER-DAEMON@{LOCAL_BBS_NAME}"
+    ndn_subj = f"NDN: {subj or '(no subject)'}"[:80]
+    to_addr = f"{msg_row['recipient']}@{msg_row['recipient_bbs']}" if msg_row["recipient_bbs"] else msg_row["recipient"]
+    ndn_body = (
+        "Sorry, user does not exist on destination BBS.\n"
+        f"Reason: {reason}\n"
+        f"Original To: {to_addr}\n"
+        f"Original Subject: {subj or '(no subject)'}\n"
+        f"Original BID: {msg_row['bid']}\n"
+    )
+    _queue_private_message(ndn_sender, rcpt_user, rcpt_bbs, ndn_subj, ndn_body, path=LOCAL_BBS_NAME)
+
+
 def outbox_enqueue(msg_id: int, neighbor_name: str, status: str = "queued", last_error: str = "") -> bool:
     con = db()
     nname = normalize_bbs_name(neighbor_name)
@@ -1358,21 +1447,26 @@ def delete_from_inbox(callsign: str, mid: int) -> str:
 
 
 def list_sent(callsign: str) -> str:
+    sender_local = normalize_callsign(callsign)
+    sender_remote = f"{sender_local}@{LOCAL_BBS_NAME}"
     con = db()
     rows = con.execute("""
-        SELECT id, recipient, subject, created_at
+        SELECT id, recipient, recipient_bbs, subject, created_at
         FROM messages
-        WHERE msg_type = 'P' AND sender = ?
+        WHERE msg_type = 'P' AND sender IN (?, ?)
         ORDER BY id DESC
         LIMIT ?
-    """, (callsign, CFG.max_sent_list)).fetchall()
+    """, (sender_local, sender_remote, CFG.max_sent_list)).fetchall()
     con.close()
 
     table_rows = []
     for r in rows:
+        to_addr = r["recipient"]
+        if r["recipient_bbs"] and r["recipient_bbs"] != LOCAL_BBS_NAME:
+            to_addr = f"{r['recipient']}@{r['recipient_bbs']}"
         table_rows.append([
             str(r["id"]),
-            r["recipient"],
+            to_addr,
             r["subject"],
             fmt_user_dt(r["created_at"]),
         ])
@@ -1445,6 +1539,9 @@ async def send_private_interactive(reader, writer, sess: Session, to_default: st
     recipient, recipient_bbs = parse_recipient_target(to)
     is_remote = bool(recipient_bbs and recipient_bbs != LOCAL_BBS_NAME)
     next_hop: str | None = None
+    if not is_remote and not user_exists(recipient):
+        await send(writer, f"No such local user: {recipient}\r\n")
+        return
     if is_remote:
         next_hop, reason = select_next_hop(recipient_bbs, _split_path_nodes(LOCAL_BBS_NAME))
         if not next_hop:
@@ -1702,7 +1799,11 @@ def _store_forward_message(fields: dict[str, str], body: str) -> tuple[bool, str
     if msg_type == "P":
         full_path = _path_append(path, LOCAL_BBS_NAME)
         next_hop: str | None = None
-        if recipient_bbs and recipient_bbs != LOCAL_BBS_NAME:
+        if not recipient_bbs or recipient_bbs == LOCAL_BBS_NAME:
+            if not user_exists(recipient):
+                con.close()
+                return False, "no_such_user"
+        else:
             visited = _split_path_nodes(full_path)
             next_hop, reason = select_next_hop(recipient_bbs, visited)
             if not next_hop:
@@ -2012,6 +2113,10 @@ async def forward_connect_and_push(neighbor: dict):
                 reason = "reject"
                 if resp and resp.startswith(f"{FORWARD_PROTO} REJECT "):
                     reason = resp
+                    parts = resp.split(" ", 3)
+                    reject_reason = parts[3] if len(parts) >= 4 else ""
+                    if r["msg_type"] == "P" and reject_reason == "no_such_user":
+                        queue_ndn_for_message(r, reject_reason)
                 outbox_mark_result(r["outbox_id"], "failed", reason[:200])
 
         await fwd_send_line(writer, f"{FORWARD_PROTO} BYE")
