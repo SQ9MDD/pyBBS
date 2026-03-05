@@ -1130,7 +1130,7 @@ def _topology_graph() -> dict[str, set[str]]:
     return graph
 
 
-def topology_edges_for_netinfo(exclude_node: str | None = None) -> list[tuple[str, str]]:
+def topology_edges_for_netinfo(exclude_via_neighbor: str | None = None) -> list[tuple[str, str]]:
     ttl_sec = max(60, int(CFG.topology_edge_ttl_sec))
     cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=ttl_sec)).isoformat(timespec="seconds")
     con = db()
@@ -1150,16 +1150,17 @@ def topology_edges_for_netinfo(exclude_node: str | None = None) -> list[tuple[st
         if (st["state"] or "").upper() == "DOWN"
     }
     out: set[tuple[str, str]] = set()
-    excl = normalize_bbs_name(exclude_node or "")
+    excl_via = normalize_bbs_name(exclude_via_neighbor or "")
     for r in rows:
         via = normalize_bbs_name(r["via_neighbor"] or "")
         if via in down_neighbors:
             continue
+        if excl_via and via == excl_via:
+            # Avoid reflecting topology learned from this same neighbor.
+            continue
         src = normalize_bbs_name(r["src"] or "")
         dst = normalize_bbs_name(r["dst"] or "")
         if not src or not dst or src == dst:
-            continue
-        if excl and (src == excl or dst == excl):
             continue
         out.add((src, dst))
     return sorted(out)
@@ -2231,8 +2232,8 @@ async def handle_forward_session(reader: asyncio.StreamReader, writer: asyncio.S
             await fwd_send_line(writer, f"NODE:{LOCAL_BBS_NAME}")
             for nei_name in sorted(netinfo_neighbors()):
                 await fwd_send_line(writer, f"NEI:{nei_name}")
-            # Avoid reflecting back edges touching the peer itself.
-            for src, dst in topology_edges_for_netinfo(exclude_node=neighbor_name):
+            # Avoid reflecting back edges learned from this peer.
+            for src, dst in topology_edges_for_netinfo(exclude_via_neighbor=neighbor_name):
                 await fwd_send_line(writer, f"EDGE:{src},{dst}")
             await fwd_send_line(writer, f"{FORWARD_PROTO} END")
             continue
