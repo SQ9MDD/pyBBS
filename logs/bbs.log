@@ -1,1 +1,29 @@
 2026-03-05 12:51:23,718 INFO bbs log_smoke_test
+2026-03-05 12:56:39,821 INFO __main__ server_starting bbs=SQ9MDD-12 host=0.0.0.0 port=8023
+2026-03-05 12:56:39,875 INFO __main__ server_listening addrs=('0.0.0.0', 8023) bbs=SQ9MDD-12
+2026-03-05 12:56:39,994 WARNING __main__ Forward connect failed neighbor=SQ9MDD-11
+2026-03-05 12:56:56,909 INFO __main__ client_connected peer=127.0.0.1:63553
+2026-03-05 12:57:08,085 INFO __main__ login_start peer=127.0.0.1:63553 callsign=SQ9MDD
+2026-03-05 12:57:10,179 INFO __main__ login_ok peer=127.0.0.1:63553 callsign=SQ9MDD
+2026-03-05 12:57:15,593 INFO __main__ cmd peer=127.0.0.1:63553 user=SQ9MDD cmd=CONNECTION args=
+2026-03-05 12:57:40,112 WARNING __main__ Forward connect failed neighbor=SQ9MDD-11
+2026-03-05 12:58:02,567 INFO __main__ client_connected peer=10.9.10.201:6390
+2026-03-05 12:58:02,615 INFO __main__ forward_session_start peer=10.9.10.201:6390
+2026-03-05 12:58:02,935 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 12:58:02,962 INFO __main__ client_disconnected peer=10.9.10.201:6390 user=-
+2026-03-05 12:58:15,298 INFO __main__ cmd peer=127.0.0.1:63553 user=SQ9MDD cmd=CONNECTIONS args=
+2026-03-05 12:58:38,431 INFO __main__ cmd peer=127.0.0.1:63553 user=SQ9MDD cmd=CONNECTIONS args=
+2026-03-05 12:58:49,024 INFO __main__ cmd peer=127.0.0.1:63553 user=SQ9MDD cmd=CONNECTIONS args=
+2026-03-05 12:59:03,461 INFO __main__ client_connected peer=10.9.10.201:6450
+2026-03-05 12:59:03,513 INFO __main__ forward_session_start peer=10.9.10.201:6450
+2026-03-05 12:59:03,781 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 12:59:03,813 INFO __main__ client_disconnected peer=10.9.10.201:6450 user=-
+2026-03-05 13:00:04,281 INFO __main__ client_connected peer=10.9.10.201:6541
+2026-03-05 13:00:04,313 INFO __main__ forward_session_start peer=10.9.10.201:6541
+2026-03-05 13:00:04,546 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 13:00:04,579 INFO __main__ client_disconnected peer=10.9.10.201:6541 user=-
+2026-03-05 13:00:04,980 INFO __main__ cmd peer=127.0.0.1:63553 user=SQ9MDD cmd=CONNECTIONS args=
+2026-03-05 13:01:04,946 INFO __main__ client_connected peer=10.9.10.201:6634
+2026-03-05 13:01:04,998 INFO __main__ forward_session_start peer=10.9.10.201:6634
+2026-03-05 13:01:05,288 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 13:01:05,346 INFO __main__ client_disconnected peer=10.9.10.201:6634 user=-

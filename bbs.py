@@ -512,10 +512,45 @@ class Session:
     def __init__(self):
         self.callsign: str | None = None
         self.in_convers: bool = False
+        self.cmd_history: list[str] = []
+        self.cmd_history_pos: int | None = None
+        self.cmd_history_stash: str = ""
 
     def prompt(self) -> str:
         base = CFG.prompt_convers if self.in_convers else CFG.prompt_bbs
         return f"[{LOCAL_BBS_NAME}] {base}"
+
+    def history_reset_nav(self):
+        self.cmd_history_pos = None
+        self.cmd_history_stash = ""
+
+    def history_add(self, line: str):
+        s = (line or "").strip()
+        if not s:
+            return
+        self.cmd_history.append(s)
+        if len(self.cmd_history) > 100:
+            self.cmd_history = self.cmd_history[-100:]
+        self.history_reset_nav()
+
+    def history_prev(self, current: str) -> str | None:
+        if not self.cmd_history:
+            return None
+        if self.cmd_history_pos is None:
+            self.cmd_history_stash = current
+            self.cmd_history_pos = len(self.cmd_history) - 1
+        elif self.cmd_history_pos > 0:
+            self.cmd_history_pos -= 1
+        return self.cmd_history[self.cmd_history_pos]
+
+    def history_next(self) -> str | None:
+        if self.cmd_history_pos is None:
+            return None
+        if self.cmd_history_pos < len(self.cmd_history) - 1:
+            self.cmd_history_pos += 1
+            return self.cmd_history[self.cmd_history_pos]
+        self.cmd_history_pos = None
+        return self.cmd_history_stash
 
 
 def normalize_callsign(s: str) -> str:
@@ -536,7 +571,20 @@ async def send(writer: asyncio.StreamWriter, text: str):
     await writer.drain()
 
 
-async def readline(reader: asyncio.StreamReader):
+async def _redraw_input_line(writer: asyncio.StreamWriter, prompt: str, text: str, prev_render_len: int) -> int:
+    rendered = prompt + text
+    pad = " " * max(0, prev_render_len - len(rendered))
+    writer.write(("\r" + rendered + pad).encode("utf-8"))
+    await writer.drain()
+    return len(rendered)
+
+
+async def readline(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter | None = None,
+    sess: Session | None = None,
+    history_enabled: bool = False,
+):
     """
     Returns:
       - None on EOF (client disconnected)
@@ -545,6 +593,9 @@ async def readline(reader: asyncio.StreamReader):
     """
     rid = id(reader)
     data = bytearray()
+    prev_render_len = len(sess.prompt()) if (history_enabled and sess) else 0
+    if history_enabled and sess:
+        sess.history_reset_nav()
 
     while True:
         raw = await reader.read(1)
@@ -595,6 +646,23 @@ async def readline(reader: asyncio.StreamReader):
 
         # Ignore NUL used by some telnet clients with CR-NUL line endings.
         if b == 0:
+            continue
+
+        # Arrow key history navigation in command mode: ESC [ A / ESC [ B
+        if (
+            b == 27
+            and history_enabled
+            and writer is not None
+            and sess is not None
+        ):
+            seq1 = await reader.read(1)
+            seq2 = await reader.read(1)
+            if seq1 and seq2 and seq1[0] == 91 and seq2[0] in (65, 66):
+                cur_text = data.decode("utf-8", errors="ignore")
+                repl = sess.history_prev(cur_text) if seq2[0] == 65 else sess.history_next()
+                if repl is not None:
+                    data = bytearray(repl.encode("utf-8"))
+                    prev_render_len = await _redraw_input_line(writer, sess.prompt(), repl, prev_render_len)
             continue
 
         if b == 10:  # LF
@@ -2375,7 +2443,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             if not sess.in_convers:
                 await send(writer, sess.prompt())
 
-            line = await readline(reader)
+            line = await readline(reader, writer=writer, sess=sess, history_enabled=not sess.in_convers)
             if line is None:
                 break
 
@@ -2407,6 +2475,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             parts = line.strip().split()
             cmd = parts[0].upper()
             cmd = ALIASES.get(cmd, cmd)
+            sess.history_add(line.strip())
             LOGGER.info("cmd peer=%s user=%s cmd=%s args=%s", peer, sess.callsign, cmd, " ".join(parts[1:])[:120])
 
             if cmd in ("Q", "QUIT", "EXIT"):
