@@ -1110,6 +1110,7 @@ def _topology_graph() -> dict[str, set[str]]:
         n for n, st in nstatus.items()
         if (st["state"] or "").upper() == "DOWN"
     }
+    origin = normalize_bbs_name(LOCAL_BBS_NAME)
 
     graph: dict[str, set[str]] = {}
     for r in rows:
@@ -1120,12 +1121,16 @@ def _topology_graph() -> dict[str, set[str]]:
         dst = normalize_bbs_name(r["dst"] or "")
         if not src or not dst:
             continue
+        # Never allow local direct links to neighbors currently marked DOWN,
+        # even if this edge was re-learned indirectly from another node.
+        if origin and ((src == origin and dst in down_neighbors) or (dst == origin and src in down_neighbors)):
+            continue
         graph.setdefault(src, set()).add(dst)
         graph.setdefault(dst, set()).add(src)
     return graph
 
 
-def topology_edges_for_netinfo() -> list[tuple[str, str]]:
+def topology_edges_for_netinfo(exclude_node: str | None = None) -> list[tuple[str, str]]:
     ttl_sec = max(60, int(CFG.topology_edge_ttl_sec))
     cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=ttl_sec)).isoformat(timespec="seconds")
     con = db()
@@ -1145,6 +1150,7 @@ def topology_edges_for_netinfo() -> list[tuple[str, str]]:
         if (st["state"] or "").upper() == "DOWN"
     }
     out: set[tuple[str, str]] = set()
+    excl = normalize_bbs_name(exclude_node or "")
     for r in rows:
         via = normalize_bbs_name(r["via_neighbor"] or "")
         if via in down_neighbors:
@@ -1152,6 +1158,8 @@ def topology_edges_for_netinfo() -> list[tuple[str, str]]:
         src = normalize_bbs_name(r["src"] or "")
         dst = normalize_bbs_name(r["dst"] or "")
         if not src or not dst or src == dst:
+            continue
+        if excl and (src == excl or dst == excl):
             continue
         out.add((src, dst))
     return sorted(out)
@@ -1364,6 +1372,7 @@ def topology_links_list() -> str:
         n for n, st in nstatus.items()
         if (st["state"] or "").upper() == "DOWN"
     }
+    origin = normalize_bbs_name(LOCAL_BBS_NAME)
     con = db()
     rows = con.execute("""
         SELECT src, dst, via_neighbor, seen_at
@@ -1380,7 +1389,11 @@ def topology_links_list() -> str:
             continue
         via = normalize_bbs_name(r["via_neighbor"] or "")
         seen = parse_iso_dt(r["seen_at"])
-        if via in down_neighbors:
+        local_down_link = bool(origin and ((src == origin and dst in down_neighbors) or (dst == origin and src in down_neighbors)))
+        if local_down_link:
+            age_sec = 0 if not seen else int((now - seen).total_seconds())
+            row_status = "DOWN"
+        elif via in down_neighbors:
             age_sec = 0 if not seen else int((now - seen).total_seconds())
             row_status = "DOWN"
         elif not seen:
@@ -2218,7 +2231,8 @@ async def handle_forward_session(reader: asyncio.StreamReader, writer: asyncio.S
             await fwd_send_line(writer, f"NODE:{LOCAL_BBS_NAME}")
             for nei_name in sorted(netinfo_neighbors()):
                 await fwd_send_line(writer, f"NEI:{nei_name}")
-            for src, dst in topology_edges_for_netinfo():
+            # Avoid reflecting back edges touching the peer itself.
+            for src, dst in topology_edges_for_netinfo(exclude_node=neighbor_name):
                 await fwd_send_line(writer, f"EDGE:{src},{dst}")
             await fwd_send_line(writer, f"{FORWARD_PROTO} END")
             continue

@@ -75,3 +75,67 @@
 2026-03-05 13:27:03,292 INFO __main__ forward_session_start peer=10.9.10.201:9218
 2026-03-05 13:27:03,644 INFO __main__ Forward session from SQ9MDD-11 accepted=0
 2026-03-05 13:27:03,675 INFO __main__ client_disconnected peer=10.9.10.201:9218 user=-
+2026-03-05 13:28:05,252 INFO __main__ client_connected peer=10.9.10.201:9323
+2026-03-05 13:28:05,309 INFO __main__ forward_session_start peer=10.9.10.201:9323
+2026-03-05 13:28:05,610 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 13:28:05,658 INFO __main__ client_disconnected peer=10.9.10.201:9323 user=-
+2026-03-05 13:29:00,231 INFO __main__ server_starting bbs=SQ9MDD-12 host=0.0.0.0 port=8023
+2026-03-05 13:29:00,285 INFO __main__ server_listening addrs=('0.0.0.0', 8023) bbs=SQ9MDD-12
+2026-03-05 13:29:05,976 INFO __main__ client_connected peer=10.9.10.201:9422
+2026-03-05 13:29:06,005 INFO __main__ forward_session_start peer=10.9.10.201:9422
+2026-03-05 13:29:06,327 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 13:29:06,353 INFO __main__ client_disconnected peer=10.9.10.201:9422 user=-
+2026-03-05 13:29:13,726 INFO __main__ client_connected peer=127.0.0.1:51044
+2026-03-05 13:29:17,875 INFO __main__ login_start peer=127.0.0.1:51044 callsign=SQ9MDD
+2026-03-05 13:29:19,732 INFO __main__ login_ok peer=127.0.0.1:51044 callsign=SQ9MDD
+2026-03-05 13:29:23,566 INFO __main__ cmd peer=127.0.0.1:51044 user=SQ9MDD cmd=CONNECTIONS args=
+2026-03-05 13:30:06,848 INFO __main__ client_connected peer=10.9.10.201:9511
+2026-03-05 13:30:06,908 INFO __main__ forward_session_start peer=10.9.10.201:9511
+2026-03-05 13:30:07,410 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 13:30:07,458 INFO __main__ client_disconnected peer=10.9.10.201:9511 user=-
+2026-03-05 13:31:07,981 INFO __main__ client_connected peer=10.9.10.201:9610
+2026-03-05 13:31:08,059 INFO __main__ forward_session_start peer=10.9.10.201:9610
+2026-03-05 13:31:08,329 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 13:31:08,358 INFO __main__ client_disconnected peer=10.9.10.201:9610 user=-
+2026-03-05 13:32:08,654 INFO __main__ client_connected peer=10.9.10.201:9705
+2026-03-05 13:32:08,690 INFO __main__ forward_session_start peer=10.9.10.201:9705
+2026-03-05 13:32:08,973 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 13:32:09,041 INFO __main__ client_disconnected peer=10.9.10.201:9705 user=-
+2026-03-05 13:32:59,905 INFO __main__ client_connected peer=10.9.10.201:9789
+2026-03-05 13:32:59,942 INFO __main__ forward_session_start peer=10.9.10.201:9789
+2026-03-05 13:33:00,211 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 13:33:00,241 INFO __main__ client_disconnected peer=10.9.10.201:9789 user=-
+2026-03-05 13:34:00,627 INFO __main__ client_connected peer=10.9.10.201:9848
+2026-03-05 13:34:00,660 INFO __main__ forward_session_start peer=10.9.10.201:9848
+2026-03-05 13:34:00,904 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 13:34:00,938 INFO __main__ client_disconnected peer=10.9.10.201:9848 user=-
+2026-03-05 13:35:01,473 INFO __main__ client_connected peer=10.9.10.201:9909
+2026-03-05 13:35:01,557 INFO __main__ forward_session_start peer=10.9.10.201:9909
+2026-03-05 13:35:01,790 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 13:35:01,823 INFO __main__ client_disconnected peer=10.9.10.201:9909 user=-
+2026-03-05 13:36:02,381 INFO __main__ client_connected peer=10.9.10.201:9966
+2026-03-05 13:36:02,440 INFO __main__ forward_session_start peer=10.9.10.201:9966
+2026-03-05 13:36:02,775 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 13:36:02,804 INFO __main__ client_disconnected peer=10.9.10.201:9966 user=-
+2026-03-05 13:37:03,514 INFO __main__ client_connected peer=10.9.10.201:10036
+2026-03-05 13:37:03,554 INFO __main__ forward_session_start peer=10.9.10.201:10036
+2026-03-05 13:37:03,795 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 13:37:03,837 INFO __main__ client_disconnected peer=10.9.10.201:10036 user=-
+2026-03-05 13:38:04,238 INFO __main__ client_connected peer=10.9.10.201:10108
+2026-03-05 13:38:04,272 INFO __main__ forward_session_start peer=10.9.10.201:10108
+2026-03-05 13:38:04,606 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 13:38:04,639 INFO __main__ client_disconnected peer=10.9.10.201:10108 user=-
+2026-03-05 13:39:05,020 INFO __main__ client_connected peer=10.9.10.201:10165
+2026-03-05 13:39:05,105 INFO __main__ forward_session_start peer=10.9.10.201:10165
+2026-03-05 13:39:05,341 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 13:39:05,370 INFO __main__ client_disconnected peer=10.9.10.201:10165 user=-
+2026-03-05 13:40:10,251 INFO __main__ server_starting bbs=SQ9MDD-12 host=0.0.0.0 port=8023
+2026-03-05 13:40:10,297 INFO __main__ server_listening addrs=('0.0.0.0', 8023) bbs=SQ9MDD-12
+2026-03-05 13:41:09,480 INFO __main__ client_connected peer=10.9.10.201:10309
+2026-03-05 13:41:09,551 INFO __main__ forward_session_start peer=10.9.10.201:10309
+2026-03-05 13:41:09,810 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 13:41:09,834 INFO __main__ client_disconnected peer=10.9.10.201:10309 user=-
+2026-03-05 13:42:10,409 INFO __main__ client_connected peer=10.9.10.201:10384
+2026-03-05 13:42:10,436 INFO __main__ forward_session_start peer=10.9.10.201:10384
+2026-03-05 13:42:10,760 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 13:42:10,784 INFO __main__ client_disconnected peer=10.9.10.201:10384 user=-
