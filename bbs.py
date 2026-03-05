@@ -8,6 +8,8 @@ import os
 import logging
 import hashlib
 import hmac
+import time
+from collections import deque
 from dataclasses import dataclass
 
 DB_PATH = "bbs.sqlite"
@@ -61,6 +63,7 @@ class BBSConfig:
     forward_backfill_max_per_session: int = 200
     bulletin_retention_days: int = 60
     outbox_retention_days: int = 14
+    topology_edge_ttl_sec: int = 1800
 
     def __post_init__(self):
         if self.scopes is None:
@@ -96,6 +99,7 @@ def _default_config_dict() -> dict:
         "forward_backfill_max_per_session": 200,
         "bulletin_retention_days": 60,
         "outbox_retention_days": 14,
+        "topology_edge_ttl_sec": 1800,
     }
 
 
@@ -406,7 +410,30 @@ def init_db():
             FOREIGN KEY(msg_id) REFERENCES messages(id)
         );
     """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS neighbor_status (
+            neighbor_name TEXT PRIMARY KEY,
+            state TEXT NOT NULL,
+            last_ok_at TEXT,
+            last_fail_at TEXT,
+            fail_count INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            rtt_ms INTEGER,
+            updated_at TEXT NOT NULL
+        );
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS topology_edges (
+            src TEXT NOT NULL,
+            dst TEXT NOT NULL,
+            cost INTEGER NOT NULL DEFAULT 1,
+            seen_at TEXT NOT NULL,
+            via_neighbor TEXT NOT NULL,
+            PRIMARY KEY(src, dst, via_neighbor)
+        );
+    """)
     con.execute("CREATE INDEX IF NOT EXISTS idx_outbox_neighbor_status_try ON outbox(neighbor_name, status, last_try_at);")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_topology_seen ON topology_edges(seen_at);")
 
     # Migration safety
     user_cols = _table_columns(con, "users")
@@ -684,9 +711,157 @@ def cleanup_retention():
                 "DELETE FROM outbox WHERE status IN ('sent', 'failed') AND created_at < ?",
                 (o_cutoff,),
             )
+
+        ttl_sec = max(60, int(CFG.topology_edge_ttl_sec))
+        t_cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=ttl_sec)).isoformat(timespec="seconds")
+        con.execute("DELETE FROM topology_edges WHERE seen_at < ?", (t_cutoff,))
         con.commit()
     finally:
         con.close()
+
+
+def mark_neighbor_ok(neighbor_name: str, rtt_ms: int):
+    nname = normalize_bbs_name(neighbor_name)
+    if not nname:
+        return
+    now = now_iso()
+    con = db()
+    con.execute(
+        """
+        INSERT INTO neighbor_status(neighbor_name, state, last_ok_at, last_fail_at, fail_count, last_error, rtt_ms, updated_at)
+        VALUES (?, 'UP', ?, NULL, 0, '', ?, ?)
+        ON CONFLICT(neighbor_name) DO UPDATE SET
+            state = 'UP',
+            last_ok_at = excluded.last_ok_at,
+            fail_count = 0,
+            last_error = '',
+            rtt_ms = excluded.rtt_ms,
+            updated_at = excluded.updated_at
+        """,
+        (nname, now, int(rtt_ms), now),
+    )
+    con.commit()
+    con.close()
+
+
+def mark_neighbor_fail(neighbor_name: str, error: str):
+    nname = normalize_bbs_name(neighbor_name)
+    if not nname:
+        return
+    now = now_iso()
+    con = db()
+    row = con.execute(
+        "SELECT fail_count FROM neighbor_status WHERE neighbor_name = ?",
+        (nname,),
+    ).fetchone()
+    fail_count = int(row["fail_count"]) + 1 if row else 1
+    con.execute(
+        """
+        INSERT INTO neighbor_status(neighbor_name, state, last_ok_at, last_fail_at, fail_count, last_error, rtt_ms, updated_at)
+        VALUES (?, 'DOWN', NULL, ?, ?, ?, NULL, ?)
+        ON CONFLICT(neighbor_name) DO UPDATE SET
+            state = 'DOWN',
+            last_fail_at = excluded.last_fail_at,
+            fail_count = ?,
+            last_error = excluded.last_error,
+            updated_at = excluded.updated_at
+        """,
+        (nname, now, fail_count, (error or "")[:120], now, fail_count),
+    )
+    con.commit()
+    con.close()
+
+
+def _store_topology_for_source(src: str, neighbors: list[str], via_neighbor: str):
+    src_n = normalize_bbs_name(src)
+    via_n = normalize_bbs_name(via_neighbor)
+    if not src_n or not via_n:
+        return
+    now = now_iso()
+    clean_neighbors = sorted({normalize_bbs_name(n) for n in neighbors if normalize_bbs_name(n)})
+    con = db()
+    con.execute("DELETE FROM topology_edges WHERE src = ? AND via_neighbor = ?", (src_n, via_n))
+    for dst in clean_neighbors:
+        if dst == src_n:
+            continue
+        con.execute(
+            """
+            INSERT INTO topology_edges(src, dst, cost, seen_at, via_neighbor)
+            VALUES (?, ?, 1, ?, ?)
+            ON CONFLICT(src, dst, via_neighbor) DO UPDATE SET
+                cost = 1,
+                seen_at = excluded.seen_at
+            """,
+            (src_n, dst, now, via_n),
+        )
+    con.commit()
+    con.close()
+
+
+def refresh_local_topology():
+    local_neighbors = [n["name"] for n in enabled_neighbors()]
+    _store_topology_for_source(LOCAL_BBS_NAME, local_neighbors, LOCAL_BBS_NAME)
+
+
+def route_map() -> dict[str, dict]:
+    ttl_sec = max(60, int(CFG.topology_edge_ttl_sec))
+    cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=ttl_sec)).isoformat(timespec="seconds")
+    con = db()
+    try:
+        rows = con.execute(
+            "SELECT src, dst FROM topology_edges WHERE seen_at >= ?",
+            (cutoff,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        con.close()
+        return {}
+    con.close()
+
+    graph: dict[str, set[str]] = {}
+    for r in rows:
+        src = normalize_bbs_name(r["src"] or "")
+        dst = normalize_bbs_name(r["dst"] or "")
+        if not src or not dst:
+            continue
+        graph.setdefault(src, set()).add(dst)
+        graph.setdefault(dst, set()).add(src)
+
+    origin = normalize_bbs_name(LOCAL_BBS_NAME)
+    if not origin:
+        return {}
+    q = deque([origin])
+    visited: dict[str, list[str]] = {origin: [origin]}
+    while q:
+        cur = q.popleft()
+        for nxt in sorted(graph.get(cur, set())):
+            if nxt in visited:
+                continue
+            visited[nxt] = visited[cur] + [nxt]
+            q.append(nxt)
+
+    out: dict[str, dict] = {}
+    for dest, path in visited.items():
+        if dest == origin:
+            continue
+        out[dest] = {
+            "hops": len(path) - 1,
+            "next_hop": path[1] if len(path) > 1 else dest,
+            "path": ",".join(path),
+        }
+    return out
+
+
+def neighbor_status_map() -> dict[str, sqlite3.Row]:
+    con = db()
+    try:
+        rows = con.execute(
+            "SELECT neighbor_name, state, last_ok_at, last_fail_at, fail_count, last_error, rtt_ms FROM neighbor_status"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        con.close()
+        return {}
+    con.close()
+    return {normalize_bbs_name(r["neighbor_name"] or ""): r for r in rows}
 
 
 def enabled_neighbors() -> list[dict]:
@@ -739,6 +914,8 @@ def heard_list(limit: int) -> str:
 
 def connections_list() -> str:
     neighbors = sorted(NEIGHBORS_BY_NAME.values(), key=lambda n: n["name"])
+    nstatus = neighbor_status_map()
+    routes = route_map()
     con = db()
     stats_rows = con.execute("""
         SELECT neighbor_name, status, COUNT(*) AS c
@@ -761,23 +938,45 @@ def connections_list() -> str:
 
     table_rows = []
     for n in neighbors:
+        st = nstatus.get(n["name"])
         nstats = stats.get(n["name"], {"queued": 0, "failed": 0})
         enabled = "Y" if n.get("enabled") else "N"
+        state = (st["state"] if st else "UNK")[:4]
+        rtt = str(st["rtt_ms"]) if st and st["rtt_ms"] is not None else "-"
+        last_ok = fmt_user_dt(st["last_ok_at"]) if st else "-"
+        hop = routes.get(n["name"], {}).get("hops", 1)
         table_rows.append([
             n["name"],
             n["host"],
             str(n["port"]),
             enabled,
+            state,
+            str(hop),
+            rtt,
+            last_ok if last_ok else "-",
             str(nstats["queued"]),
             str(nstats["failed"]),
         ])
-    return _ui_table(
+    direct = _ui_table(
         "CONNECTIONS",
-        ["NAME", "HOST", "PORT", "EN", "QUEUED", "FAILED"],
-        [16, 20, 5, 2, 6, 6],
+        ["NAME", "HOST", "PORT", "EN", "ST", "H", "RTT", "LAST_OK", "Q", "F"],
+        [10, 12, 4, 2, 4, 2, 4, 16, 3, 3],
         table_rows,
         "No connections defined.",
     )
+
+    route_rows = []
+    for dest in sorted(routes.keys()):
+        r = routes[dest]
+        route_rows.append([dest, r["next_hop"], str(r["hops"]), r["path"]])
+    topo = _ui_table(
+        "TOPOLOGY ROUTES",
+        ["DEST", "NEXT_HOP", "HOPS", "PATH"],
+        [12, 12, 4, 43],
+        route_rows,
+        "No discovered routes yet.",
+    )
+    return direct + topo
 
 
 def users_list() -> str:
@@ -1515,6 +1714,13 @@ async def handle_forward_session(reader: asyncio.StreamReader, writer: asyncio.S
         if len(cmd) >= 2 and cmd[0] == FORWARD_PROTO and cmd[1] == "BYE":
             break
 
+        if len(cmd) == 2 and cmd[0] == FORWARD_PROTO and cmd[1] == "NETINFO":
+            await fwd_send_line(writer, f"NODE:{LOCAL_BBS_NAME}")
+            for nei in sorted(enabled_neighbors(), key=lambda n: n["name"]):
+                await fwd_send_line(writer, f"NEI:{nei['name']}")
+            await fwd_send_line(writer, f"{FORWARD_PROTO} END")
+            continue
+
         if len(cmd) >= 3 and cmd[0] == FORWARD_PROTO and cmd[1] == "LISTBID":
             mtype = cmd[2].strip().upper()
             scope = cmd[3].strip().upper() if len(cmd) >= 4 else ""
@@ -1618,9 +1824,28 @@ async def _fwd_read_bid_list(reader: asyncio.StreamReader) -> set[str]:
     return out
 
 
+async def _fwd_read_netinfo(reader: asyncio.StreamReader) -> tuple[str | None, list[str]]:
+    node: str | None = None
+    neighbors: list[str] = []
+    while True:
+        line = await fwd_read_line(reader, CFG.forward_session_timeout_sec)
+        if line is None:
+            break
+        if line == f"{FORWARD_PROTO} END":
+            break
+        if line.startswith("NODE:"):
+            node = normalize_bbs_name(line[5:].strip())
+            continue
+        if line.startswith("NEI:"):
+            nei = normalize_bbs_name(line[4:].strip())
+            if nei:
+                neighbors.append(nei)
+    return node, sorted(set(neighbors))
+
+
 async def forward_connect_and_push(neighbor: dict):
     nname = neighbor["name"]
-    rows: list[sqlite3.Row] = []
+    rows: list[sqlite3.Row] = _outbox_rows_for_neighbor(nname, CFG.forward_max_msgs_per_session)
 
     try:
         conn = asyncio.open_connection(neighbor["host"], neighbor["port"])
@@ -1628,10 +1853,12 @@ async def forward_connect_and_push(neighbor: dict):
     except Exception as e:
         for r in rows:
             outbox_mark_result(r["outbox_id"], "failed", f"connect:{type(e).__name__}")
+        mark_neighbor_fail(nname, f"connect:{type(e).__name__}")
         LOGGER.warning("Forward connect failed neighbor=%s", nname)
         return
 
     try:
+        t0 = time.monotonic()
         nonce = secrets.token_hex(10)
         await fwd_send_line(writer, f"{FORWARD_PROTO} HELLO {LOCAL_BBS_NAME} {nonce}")
         chall = await fwd_read_line(reader, CFG.forward_session_timeout_sec)
@@ -1643,6 +1870,11 @@ async def forward_connect_and_push(neighbor: dict):
         ok_line = await fwd_read_line(reader, CFG.forward_session_timeout_sec)
         if not ok_line or not ok_line.startswith(f"{FORWARD_PROTO} OK "):
             raise RuntimeError("auth")
+        mark_neighbor_ok(nname, int((time.monotonic() - t0) * 1000))
+
+        await fwd_send_line(writer, f"{FORWARD_PROTO} NETINFO")
+        node_name, node_neighbors = await _fwd_read_netinfo(reader)
+        _store_topology_for_source(node_name or nname, node_neighbors, nname)
 
         remote_p_bids: set[str] = set()
         remote_b_bids: set[str] = set()
@@ -1711,6 +1943,7 @@ async def forward_connect_and_push(neighbor: dict):
         await fwd_send_line(writer, f"{FORWARD_PROTO} BYE")
         LOGGER.info("Forward to neighbor=%s sent=%s/%s", nname, accepted, len(push_rows))
     except Exception as e:
+        mark_neighbor_fail(nname, f"session:{type(e).__name__}")
         for r in rows:
             if r["status"] != "sent":
                 outbox_mark_result(r["outbox_id"], "failed", f"session:{type(e).__name__}")
@@ -1727,6 +1960,7 @@ async def forward_loop():
     while True:
         try:
             cleanup_retention()
+            refresh_local_topology()
             if CFG.forward_enabled:
                 for nei in enabled_neighbors():
                     await forward_connect_and_push(nei)
