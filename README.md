@@ -1,50 +1,44 @@
 # pyBBS
 
-Lekki symulator klasycznego BBS-a (Bulletin Board System) działający po Telnet, napisany w Pythonie (`asyncio` + `sqlite`), z podstawowym stylem pracy zbliżonym do FBB.
+## PL
 
-## Funkcje
+Lekki symulator klasycznego BBS-a (Bulletin Board System) po Telnet, napisany w Pythonie (`asyncio` + `sqlite`), ze stylem terminalowym inspirowanym retro/FBB.
+
+### Funkcje
 
 - logowanie użytkowników (callsign + hasło)
-- prywatna poczta (`L`, `N`, `R`, `RN`, `S`, `RE`, `K`, `LS`)
+- poczta prywatna (`L`, `N`, `R`, `RN`, `S`, `RE`, `K`, `LS`)
 - biuletyny (`B`, `RB`, `SB`)
-- lista heard (`J` / `MH`)
-- tryb convers (`C`, `/WHO`, `/EX`)
-- lista zdefiniowanych sąsiadów (`CONNECTION`)
+- convers (`C`, `/WHO`, `/EX`)
+- heard list (`J`, `MH`, `MHEARD`, `H`)
+- lista połączeń i topologii (`CONNECTION`, `CONNECTED`, `CONN`)
 - lista zarejestrowanych użytkowników (`USERS`)
-- forwarding wiadomości i biuletynów między sąsiadami
-- local-only storage w `sqlite` (`bbs.sqlite`)
+- forwarding biuletynów multi-hop
+- forwarding prywatnych wiadomości po wyliczonych trasach (hops)
+- okresowy alive check sąsiadów (UP/DOWN, RTT)
+- auto NDN dla nieistniejącego odbiorcy (`no_such_user`)
 
-## Wymagania
+### Wymagania
 
 - Python 3.10+ (zalecane 3.11+)
-- klient Telnet (np. `telnet`, `netcat`, PuTTY)
+- klient Telnet (`telnet`, `nc`, PuTTY)
 
-Projekt nie wymaga zewnętrznych bibliotek PIP.
+Brak zewnętrznych zależności PIP.
 
-## Szybki start
-
-1. Sklonuj repo i przejdź do katalogu projektu.
-2. Uruchom serwer:
+### Szybki start
 
 ```bash
 python3 bbs.py
-```
-
-3. Połącz się klientem Telnet:
-
-```bash
 telnet 127.0.0.1 8023
 ```
 
-Przy pierwszym logowaniu podajesz callsign, nazwę i ustawiasz hasło.
+Przy pierwszym logowaniu podajesz callsign, nazwę i hasło.
 
-## Konfiguracja
+### Konfiguracja (`bbs_config.json`)
 
-Plik: `bbs_config.json`
+Plik tworzy się automatycznie przy pierwszym uruchomieniu.
 
-Jeśli nie istnieje, zostanie utworzony automatycznie z wartościami domyślnymi.
-
-Przykładowa konfiguracja:
+Przykład:
 
 ```json
 {
@@ -71,66 +65,109 @@ Przykładowa konfiguracja:
   "forward_connect_timeout_sec": 5,
   "forward_session_timeout_sec": 20,
   "forward_max_msgs_per_session": 50,
-  "forward_max_body_bytes": 20000
+  "forward_max_body_bytes": 20000,
+  "forward_backfill_enabled": true,
+  "forward_backfill_max_per_session": 200,
+  "bulletin_retention_days": 60,
+  "outbox_retention_days": 14,
+  "topology_edge_ttl_sec": 1800
 }
 ```
 
-## Forwarding między BBS-ami
+### Routing i topologia
 
-1. Uruchom dwa węzły na różnych portach.
-2. Ustaw różne `bbs_callsign`.
-3. W `neighbors` dodaj wzajemnie oba węzły (ta sama para `shared_key`).
-4. Wysyłaj pocztę do zdalnego użytkownika jako `CALLSIGN@NAZWA_BBS`.
+- `CONNECTION` pokazuje:
+- sąsiadów z configa (`HOST/PORT`, `UP/DOWN`, `RTT`, kolejki)
+- wyliczone trasy (`DEST`, `NEXT_HOP`, `HOPS`, `PATH`)
+- koszt trasy = liczba hopów
+- topologia odświeża się cyklicznie przez wymianę `NETINFO`
 
-Wiadomości są kolejkowane w `outbox` i wysyłane cyklicznie.
+### Zachowanie przy błędach odbiorcy
 
-## Komendy
+- jeśli user nie istnieje na docelowym BBS:
+- wiadomość dostaje `REJECT no_such_user`
+- tworzona jest zwrotka NDN do nadawcy (`MAILER-DAEMON@BBS`)
+- ten sam mail nie generuje NDN w pętli
 
-### Ogólne
+### Komendy
 
-- `HELP` - pomoc
-- `WHO` - Twój callsign
-- `MOTD` - wiadomość dnia
-- `INFO` - informacje o BBS
-- `Q` / `BYE` - wyjście
+- ogólne: `HELP`, `WHO`, `MOTD`, `INFO`, `Q`, `BYE`
+- poczta: `L`, `LM`, `N`, `R`, `RM`, `RN`, `S`, `SP`, `RE`, `K`, `KM`, `LS`
+- biuletyny: `B`, `LB`, `RB`, `SB`
+- inne: `J`, `MH`, `MHEARD`, `H`, `CONNECTION`, `CONNECTED`, `CONN`, `USERS`, `C`, `T`, `TALK`, `/WHO`, `/EX`
 
-### Poczta prywatna
+### Pliki
 
-- `L` / `LM` - lista inbox
-- `N` - lista nieprzeczytanych
-- `R <id>` / `RM <id>` - czytaj wiadomość
-- `RN` - czytaj następną nieprzeczytaną
-- `S` / `SP` - napisz wiadomość
-- `RE <id>` - odpowiedz
-- `K <id>` / `KM <id>` - usuń z inbox
-- `LS` - lista wysłanych
-
-### Biuletyny
-
-- `B [SCOPE]` / `LB` - lista biuletynów
-- `RB <id>` - czytaj biuletyn
-- `SB` - nowy biuletyn
-
-### Pozostałe
-
-- `J` / `MH` / `MHEARD` / `H` - heard list
-- `CONNECTION` - lista sąsiadów (host/port/status/kolejka)
-- `USERS` - lista zarejestrowanych użytkowników
-- `C` / `T` / `TALK` - wejście do convers
-- `/WHO` - kto jest w convers
-- `/EX` - wyjście z convers
-
-## Pliki projektu
-
-- `bbs.py` - główny serwer
+- `bbs.py` - serwer i logika BBS
 - `bbs_config.json` - konfiguracja runtime
-- `bbs.sqlite` - baza danych (użytkownicy, wiadomości, outbox, heard)
-- `welcome.txt` - ekran powitalny
-- `motd.txt` - message of the day
-- `info.txt` - informacje o węźle
+- `bbs.sqlite` - baza danych
+- `welcome.txt`, `motd.txt`, `info.txt` - treści ekranów
 
-## Uwagi
+---
 
-- Hasła nie są przechowywane jawnie (hash po stronie serwera).
-- To projekt edukacyjno-hobbystyczny, nie produkcyjny system BBS.
-- W środowisku publicznym ogranicz dostęp (firewall/VPN) i używaj mocnych kluczy `shared_key`.
+## EN
+
+Lightweight retro-style Telnet BBS simulator written in Python (`asyncio` + `sqlite`), inspired by classic FBB-like terminal workflows.
+
+### Features
+
+- user login (callsign + password)
+- private mail (`L`, `N`, `R`, `RN`, `S`, `RE`, `K`, `LS`)
+- bulletins (`B`, `RB`, `SB`)
+- convers mode (`C`, `/WHO`, `/EX`)
+- heard list (`J`, `MH`, `MHEARD`, `H`)
+- connection/topology view (`CONNECTION`, `CONNECTED`, `CONN`)
+- registered users list (`USERS`)
+- multi-hop bulletin forwarding
+- routed private mail forwarding via computed next hop (hop-based)
+- periodic neighbor alive checks (UP/DOWN, RTT)
+- automatic NDN for unknown destination users (`no_such_user`)
+
+### Requirements
+
+- Python 3.10+ (3.11+ recommended)
+- Telnet client (`telnet`, `nc`, PuTTY)
+
+No external PIP dependencies.
+
+### Quick start
+
+```bash
+python3 bbs.py
+telnet 127.0.0.1 8023
+```
+
+On first login, provide callsign, display name, and password.
+
+### Configuration (`bbs_config.json`)
+
+The file is auto-generated on first run.  
+See the JSON example in the PL section above (same fields/values apply).
+
+### Routing and topology
+
+- `CONNECTION` shows:
+- configured direct neighbors (host/port/state/queue)
+- discovered routes (`DEST`, `NEXT_HOP`, `HOPS`, `PATH`)
+- route cost is hop count
+- topology is refreshed periodically via `NETINFO` exchange
+
+### Unknown recipient behavior
+
+- if destination user does not exist:
+- message is rejected with `no_such_user`
+- system generates one NDN back to sender (`MAILER-DAEMON@BBS`)
+- duplicate NDN loops are prevented
+
+### Commands
+
+- general: `HELP`, `WHO`, `MOTD`, `INFO`, `Q`, `BYE`
+- mail: `L`, `LM`, `N`, `R`, `RM`, `RN`, `S`, `SP`, `RE`, `K`, `KM`, `LS`
+- bulletins: `B`, `LB`, `RB`, `SB`
+- other: `J`, `MH`, `MHEARD`, `H`, `CONNECTION`, `CONNECTED`, `CONN`, `USERS`, `C`, `T`, `TALK`, `/WHO`, `/EX`
+
+### Notes
+
+- Passwords are hashed, never stored in plain text.
+- This is a hobby/educational project, not production infrastructure.
+- For public deployments, use network isolation and strong `shared_key` values.
