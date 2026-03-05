@@ -6,6 +6,7 @@ import string
 import json
 import os
 import logging
+from logging.handlers import RotatingFileHandler
 import hashlib
 import hmac
 import time
@@ -17,6 +18,8 @@ CONFIG_PATH = "bbs_config.json"
 WELCOME_PATH = "welcome.txt"
 MOTD_PATH = "motd.txt"
 INFO_PATH = "info.txt"
+LOG_DIR = "logs"
+LOG_PATH = os.path.join(LOG_DIR, "bbs.log")
 
 # Global state for convers
 CONVERS_CLIENTS: set[asyncio.StreamWriter] = set()
@@ -34,6 +37,31 @@ TELNET_OPT_ECHO = 1
 FORWARD_PROTO = "FWD1"
 FORWARD_HOP_LIMIT = 10
 FORWARD_LINE_MAX = 1024
+
+
+def setup_logging():
+    os.makedirs(LOG_DIR, exist_ok=True)
+    root = logging.getLogger()
+    if root.handlers:
+        return
+    root.setLevel(logging.INFO)
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    file_handler = RotatingFileHandler(LOG_PATH, maxBytes=2_000_000, backupCount=5, encoding="utf-8")
+    file_handler.setFormatter(fmt)
+    root.addHandler(file_handler)
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(fmt)
+    root.addHandler(stream_handler)
+
+
+def peer_label(writer: asyncio.StreamWriter) -> str:
+    try:
+        peer = writer.get_extra_info("peername")
+    except Exception:
+        peer = None
+    if isinstance(peer, tuple) and len(peer) >= 2:
+        return f"{peer[0]}:{peer[1]}"
+    return str(peer or "unknown")
 
 
 @dataclass
@@ -938,7 +966,14 @@ def _store_topology_for_source(src: str, neighbors: list[str], via_neighbor: str
 
 
 def refresh_local_topology():
-    local_neighbors = [n["name"] for n in enabled_neighbors()]
+    nstatus = neighbor_status_map()
+    local_neighbors = []
+    for n in enabled_neighbors():
+        st = nstatus.get(n["name"])
+        # Keep links only for neighbors that are not explicitly DOWN.
+        if st and (st["state"] or "").upper() == "DOWN":
+            continue
+        local_neighbors.append(n["name"])
     _store_topology_for_source(LOCAL_BBS_NAME, local_neighbors, LOCAL_BBS_NAME)
 
 
@@ -975,7 +1010,7 @@ def _topology_graph() -> dict[str, set[str]]:
     con = db()
     try:
         rows = con.execute(
-            "SELECT src, dst FROM topology_edges WHERE seen_at >= ?",
+            "SELECT src, dst, via_neighbor FROM topology_edges WHERE seen_at >= ?",
             (cutoff,),
         ).fetchall()
     except sqlite3.OperationalError:
@@ -983,8 +1018,17 @@ def _topology_graph() -> dict[str, set[str]]:
         return {}
     con.close()
 
+    nstatus = neighbor_status_map()
+    down_neighbors = {
+        n for n, st in nstatus.items()
+        if (st["state"] or "").upper() == "DOWN"
+    }
+
     graph: dict[str, set[str]] = {}
     for r in rows:
+        via = normalize_bbs_name(r["via_neighbor"] or "")
+        if via in down_neighbors:
+            continue
         src = normalize_bbs_name(r["src"] or "")
         dst = normalize_bbs_name(r["dst"] or "")
         if not src or not dst:
@@ -1185,6 +1229,11 @@ def connections_list() -> str:
 def topology_links_list() -> str:
     ttl_sec = max(60, int(CFG.topology_edge_ttl_sec))
     now = datetime.datetime.now(datetime.timezone.utc)
+    nstatus = neighbor_status_map()
+    down_neighbors = {
+        n for n, st in nstatus.items()
+        if (st["state"] or "").upper() == "DOWN"
+    }
     con = db()
     rows = con.execute("""
         SELECT src, dst, via_neighbor, seen_at
@@ -1195,8 +1244,12 @@ def topology_links_list() -> str:
 
     table_rows = []
     for r in rows:
+        via = normalize_bbs_name(r["via_neighbor"] or "")
         seen = parse_iso_dt(r["seen_at"])
-        if not seen:
+        if via in down_neighbors:
+            age_sec = 0 if not seen else int((now - seen).total_seconds())
+            status = "DOWN"
+        elif not seen:
             age_sec = 0
             status = "UNK"
         else:
@@ -1205,7 +1258,7 @@ def topology_links_list() -> str:
         table_rows.append([
             normalize_bbs_name(r["src"] or ""),
             normalize_bbs_name(r["dst"] or ""),
-            normalize_bbs_name(r["via_neighbor"] or ""),
+            via,
             fmt_age_short(age_sec),
             status,
         ])
@@ -1315,18 +1368,21 @@ def convers_users_text() -> str:
     return "Convers users:\r\n" + "\r\n".join(users) + "\r\n"
 
 
-async def login_flow(reader, writer, sess: Session, first_line: str | None = None):
+async def login_flow(reader, writer, sess: Session, first_line: str | None = None, peer: str = "unknown"):
     await send(writer, show_welcome() + "\r\n")
     await send(writer, "Enter your callsign: ")
 
     cs = first_line if first_line is not None else await readline(reader)
     if cs is None:
+        LOGGER.info("login_aborted peer=%s reason=disconnect_before_callsign", peer)
         return False
 
     cs = normalize_callsign(cs)
     if not cs:
         await send(writer, "\r\nNo callsign, bye.\r\n")
+        LOGGER.warning("login_failed peer=%s reason=empty_callsign", peer)
         return False
+    LOGGER.info("login_start peer=%s callsign=%s", peer, cs)
 
     con = db()
     row = con.execute(
@@ -1339,24 +1395,29 @@ async def login_flow(reader, writer, sess: Session, first_line: str | None = Non
         name_in = await readline(reader)
         if name_in is None:
             con.close()
+            LOGGER.info("login_aborted peer=%s callsign=%s reason=disconnect_name", peer, cs)
             return False
         name = normalize_name(name_in, cs)
 
         pw1 = await read_hidden_input(reader, writer, "Set password: ")
         if pw1 is None:
             con.close()
+            LOGGER.info("login_aborted peer=%s callsign=%s reason=disconnect_set_password", peer, cs)
             return False
         pw2 = await read_hidden_input(reader, writer, "Repeat password: ")
         if pw2 is None:
             con.close()
+            LOGGER.info("login_aborted peer=%s callsign=%s reason=disconnect_repeat_password", peer, cs)
             return False
         if not pw1:
             await send(writer, "Empty password is not allowed.\r\n")
             con.close()
+            LOGGER.warning("login_failed peer=%s callsign=%s reason=empty_password_new_account", peer, cs)
             return False
         if pw1 != pw2:
             await send(writer, "Passwords do not match.\r\n")
             con.close()
+            LOGGER.warning("login_failed peer=%s callsign=%s reason=password_mismatch_new_account", peer, cs)
             return False
 
         con.execute(
@@ -1364,6 +1425,7 @@ async def login_flow(reader, writer, sess: Session, first_line: str | None = Non
             (cs, name, hash_password(pw1), now_iso()),
         )
         display_name = name
+        LOGGER.info("account_created peer=%s callsign=%s", peer, cs)
     else:
         display_name = normalize_name(row["name"] or "", cs)
         stored_hash = row["password_hash"] or ""
@@ -1375,24 +1437,29 @@ async def login_flow(reader, writer, sess: Session, first_line: str | None = Non
             name_in = await readline(reader)
             if name_in is None:
                 con.close()
+                LOGGER.info("login_aborted peer=%s callsign=%s reason=disconnect_legacy_name", peer, cs)
                 return False
             name = normalize_name(name_in if name_in.strip() else display_name, cs)
 
             pw1 = await read_hidden_input(reader, writer, "Set password: ")
             if pw1 is None:
                 con.close()
+                LOGGER.info("login_aborted peer=%s callsign=%s reason=disconnect_legacy_set_password", peer, cs)
                 return False
             pw2 = await read_hidden_input(reader, writer, "Repeat password: ")
             if pw2 is None:
                 con.close()
+                LOGGER.info("login_aborted peer=%s callsign=%s reason=disconnect_legacy_repeat_password", peer, cs)
                 return False
             if not pw1:
                 await send(writer, "Empty password is not allowed.\r\n")
                 con.close()
+                LOGGER.warning("login_failed peer=%s callsign=%s reason=empty_password_legacy_setup", peer, cs)
                 return False
             if pw1 != pw2:
                 await send(writer, "Passwords do not match.\r\n")
                 con.close()
+                LOGGER.warning("login_failed peer=%s callsign=%s reason=password_mismatch_legacy_setup", peer, cs)
                 return False
 
             con.execute(
@@ -1400,20 +1467,24 @@ async def login_flow(reader, writer, sess: Session, first_line: str | None = Non
                 (name, hash_password(pw1), cs),
             )
             display_name = name
+            LOGGER.info("account_password_initialized peer=%s callsign=%s", peer, cs)
         else:
             authenticated = False
-            for _ in range(3):
+            for attempt in range(1, 4):
                 pw = await read_hidden_input(reader, writer, "Password: ")
                 if pw is None:
                     con.close()
+                    LOGGER.info("login_aborted peer=%s callsign=%s reason=disconnect_password_prompt", peer, cs)
                     return False
                 if verify_password(pw, stored_hash):
                     authenticated = True
                     break
                 await send(writer, "Invalid password.\r\n")
+                LOGGER.warning("login_failed peer=%s callsign=%s reason=bad_password attempt=%s", peer, cs, attempt)
             if not authenticated:
                 await send(writer, "Too many failed attempts.\r\n")
                 con.close()
+                LOGGER.warning("login_failed peer=%s callsign=%s reason=too_many_attempts", peer, cs)
                 return False
 
     con.commit()
@@ -1422,6 +1493,7 @@ async def login_flow(reader, writer, sess: Session, first_line: str | None = Non
     bump_heard(cs)
 
     sess.callsign = cs
+    LOGGER.info("login_ok peer=%s callsign=%s", peer, cs)
     await send(writer, f"\r\nHello {display_name} ({cs}) on {CFG.bbs_callsign}!\r\n")
     await send(writer, show_motd() + "\r\n")
     return True
@@ -1507,11 +1579,13 @@ def read_private_message(callsign: str, mid: int) -> str:
 
     if not row:
         con.close()
+        LOGGER.warning("mail_read_failed user=%s mid=%s reason=not_found", callsign, mid)
         return _ui_panel("MAIL", ["No such mail in your inbox."])
 
     con.execute("UPDATE inbox SET is_read = 1 WHERE callsign = ? AND msg_id = ?", (callsign, mid))
     con.commit()
     con.close()
+    LOGGER.info("mail_read user=%s mid=%s bid=%s", callsign, mid, row["bid"])
 
     hdr = _ui_panel(
         f"MAIL #{row['id']} BID {row['bid']}",
@@ -1545,6 +1619,7 @@ def delete_from_inbox(callsign: str, mid: int) -> str:
     cur = con.execute("DELETE FROM inbox WHERE callsign = ? AND msg_id = ?", (callsign, mid))
     con.commit()
     con.close()
+    LOGGER.info("mail_delete user=%s mid=%s deleted=%s", callsign, mid, 1 if cur.rowcount else 0)
     return "Deleted.\r\n" if cur.rowcount else "Nothing deleted.\r\n"
 
 
@@ -1643,11 +1718,13 @@ async def send_private_interactive(reader, writer, sess: Session, to_default: st
     next_hop: str | None = None
     if not is_remote and not user_exists(recipient):
         await send(writer, f"No such local user: {recipient}\r\n")
+        LOGGER.warning("mail_send_failed user=%s to=%s reason=no_such_local_user", sess.callsign, recipient)
         return
     if is_remote:
         next_hop, reason = select_next_hop(recipient_bbs, _split_path_nodes(LOCAL_BBS_NAME))
         if not next_hop:
             await send(writer, f"No route to {recipient_bbs} ({reason}).\r\n")
+            LOGGER.warning("mail_send_failed user=%s to=%s@%s reason=route_%s", sess.callsign, recipient, recipient_bbs, reason)
             return
     sender_for_store = f"{sess.callsign}@{LOCAL_BBS_NAME}" if is_remote else sess.callsign
 
@@ -1673,8 +1750,13 @@ async def send_private_interactive(reader, writer, sess: Session, to_default: st
 
     if is_remote:
         await send(writer, f"Queued Msg {mid} BID {bid} to {recipient}@{recipient_bbs}\r\n")
+        LOGGER.info(
+            "mail_queued user=%s mid=%s bid=%s to=%s@%s next_hop=%s body_bytes=%s",
+            sess.callsign, mid, bid, recipient, recipient_bbs, next_hop, len(body.encode("utf-8"))
+        )
     else:
         await send(writer, f"Sent Msg {mid} BID {bid}\r\n")
+        LOGGER.info("mail_sent_local user=%s mid=%s bid=%s to=%s body_bytes=%s", sess.callsign, mid, bid, recipient, len(body.encode("utf-8")))
 
 
 def get_mail_for_reply(callsign: str, mid: int) -> tuple[str, str] | None:
@@ -1761,6 +1843,7 @@ async def send_bulletin_interactive(reader, writer, sess: Session):
     sc = normalize_scope(sc)
     if not sc:
         await send(writer, "Invalid scope.\r\n")
+        LOGGER.warning("bulletin_post_failed user=%s reason=invalid_scope", sess.callsign)
         return
 
     await send(writer, "Subject: ")
@@ -1805,6 +1888,10 @@ async def send_bulletin_interactive(reader, writer, sess: Session):
     con.close()
 
     await send(writer, f"Bulletin posted {mid} BID {bid} SCOPE {sc}\r\n")
+    LOGGER.info(
+        "bulletin_posted user=%s mid=%s bid=%s scope=%s fanout=%s body_bytes=%s",
+        sess.callsign, mid, bid, sc, len(enabled_neighbors()), len(body.encode("utf-8"))
+    )
 
 
 def _path_append(path: str, node: str) -> str:
@@ -2243,10 +2330,10 @@ async def forward_loop():
     while True:
         try:
             cleanup_retention()
-            refresh_local_topology()
             if CFG.forward_enabled:
                 for nei in enabled_neighbors():
                     await forward_connect_and_push(nei)
+            refresh_local_topology()
         except Exception:
             LOGGER.exception("Forward loop error")
         await asyncio.sleep(max(5, int(CFG.forward_interval_sec)))
@@ -2257,6 +2344,8 @@ async def forward_loop():
 async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     sess = Session()
     SESSIONS_BY_WRITER[writer] = sess
+    peer = peer_label(writer)
+    LOGGER.info("client_connected peer=%s", peer)
 
     try:
         first_line = None
@@ -2266,11 +2355,13 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             first_line = None
 
         if first_line and first_line.startswith(f"{FORWARD_PROTO} "):
+            LOGGER.info("forward_session_start peer=%s", peer)
             await handle_forward_session(reader, writer, first_line)
             return
 
-        ok = await login_flow(reader, writer, sess, first_line=first_line)
+        ok = await login_flow(reader, writer, sess, first_line=first_line, peer=peer)
         if not ok:
+            LOGGER.info("client_disconnected peer=%s reason=login_failed", peer)
             writer.close()
             await writer.wait_closed()
             return
@@ -2299,23 +2390,28 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                     CONVERS_CLIENTS.discard(writer)
                     await send(writer, "\r\nLeft convers.\r\n")
                     await convers_broadcast(f"* {sess.callsign} left convers")
+                    LOGGER.info("convers_leave peer=%s user=%s", peer, sess.callsign)
                     continue
 
                 if up in ("/WHO",):
                     await send(writer, "\r\n" + convers_users_text())
                     await convers_send_prompt(writer)
+                    LOGGER.info("convers_who peer=%s user=%s", peer, sess.callsign)
                     continue
 
                 await convers_broadcast(f"[{sess.callsign}] {line.strip()}")
+                LOGGER.info("convers_msg peer=%s user=%s text=%s", peer, sess.callsign, line.strip()[:200])
                 continue
 
             # Command mode
             parts = line.strip().split()
             cmd = parts[0].upper()
             cmd = ALIASES.get(cmd, cmd)
+            LOGGER.info("cmd peer=%s user=%s cmd=%s args=%s", peer, sess.callsign, cmd, " ".join(parts[1:])[:120])
 
             if cmd in ("Q", "QUIT", "EXIT"):
                 await send(writer, "Bye.\r\n")
+                LOGGER.info("client_quit peer=%s user=%s", peer, sess.callsign)
                 break
 
             if cmd in ("HELP", "?"):
@@ -2339,6 +2435,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                 CONVERS_CLIENTS.add(writer)
                 await send(writer, "Entered convers. Type /EX to leave.\r\n")
                 await convers_broadcast(f"* {sess.callsign} joined convers")
+                LOGGER.info("convers_join peer=%s user=%s", peer, sess.callsign)
                 continue
 
             if cmd == "J":
@@ -2360,6 +2457,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                         continue
                     deleted = prune_topology_edges_older_than(minutes * 60)
                     await send(writer, f"Pruned {deleted} topology link(s) older than {minutes} minute(s).\r\n")
+                    LOGGER.info("topology_prune peer=%s user=%s minutes=%s deleted=%s", peer, sess.callsign, minutes, deleted)
                     continue
                 await send(writer, topology_overview())
                 continue
@@ -2435,9 +2533,10 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                 continue
 
             await send(writer, "Unknown command. Type HELP.\r\n")
+            LOGGER.warning("cmd_unknown peer=%s user=%s raw=%s", peer, sess.callsign, line.strip()[:120])
 
     except Exception:
-        LOGGER.exception("Unhandled exception in client handler")
+        LOGGER.exception("Unhandled exception in client handler peer=%s user=%s", peer, sess.callsign)
         try:
             await send(writer, "\r\nServer error.\r\n")
         except Exception:
@@ -2458,13 +2557,17 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             await writer.wait_closed()
         except Exception:
             pass
+        LOGGER.info("client_disconnected peer=%s user=%s", peer, sess.callsign or "-")
 
 
 async def main():
+    setup_logging()
+    LOGGER.info("server_starting bbs=%s host=%s port=%s", CFG.bbs_callsign, CFG.host, CFG.port)
     init_db()
     server = await asyncio.start_server(handle_client, CFG.host, CFG.port)
     addrs = ", ".join(str(s.getsockname()) for s in server.sockets)
     print(f"{CFG.title} {CFG.version} listening on {addrs} as {CFG.bbs_callsign}")
+    LOGGER.info("server_listening addrs=%s bbs=%s", addrs, CFG.bbs_callsign)
     asyncio.create_task(forward_loop())
     async with server:
         await server.serve_forever()

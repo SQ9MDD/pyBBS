@@ -106,6 +106,7 @@ Przykład:
 - `bbs.py` - serwer i logika BBS
 - `bbs_config.json` - konfiguracja runtime
 - `bbs.sqlite` - baza danych
+- `logs/bbs.log` - log zdarzeń (rotacja pliku, logowania, komendy, forwarding)
 - `welcome.txt`, `motd.txt`, `info.txt` - treści ekranów
 
 ---
@@ -178,5 +179,6 @@ See the JSON example in the PL section above (same fields/values apply).
 ### Notes
 
 - Passwords are hashed, never stored in plain text.
+- Runtime logs are written to `logs/bbs.log` (with rotation).
 - This is a hobby/educational project, not production infrastructure.
 - For public deployments, use network isolation and strong `shared_key` values.
