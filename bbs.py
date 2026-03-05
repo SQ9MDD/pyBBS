@@ -10,41 +10,8 @@ import hashlib
 import hmac
 from dataclasses import dataclass
 
-"""
-Quick setup (2 instances + forwarding):
-1) Start BBS A on one port and BBS B on another.
-2) Set different `bbs_callsign` values, and add each other to `neighbors`.
-3) Send private mail as `USER@BBSNAME` (example: `SP5XYZ@SQ5WLA`) to queue forwarding.
-4) Bulletins are forwarded through outbox as well (no multi-hop routing).
-
-Example bbs_config.json for A:
-{
-  "host": "0.0.0.0",
-  "port": 8023,
-  "bbs_callsign": "SQ5WLA",
-  "forward_enabled": true,
-  "forward_interval_sec": 20,
-  "neighbors": [
-    {"name": "SQ9MDD", "host": "127.0.0.1", "port": 9023, "shared_key": "secretAB", "enabled": true}
-  ]
-}
-
-Example bbs_config.json for B:
-{
-  "host": "0.0.0.0",
-  "port": 9023,
-  "bbs_callsign": "SQ9MDD",
-  "forward_enabled": true,
-  "forward_interval_sec": 20,
-  "neighbors": [
-    {"name": "SQ5WLA", "host": "127.0.0.1", "port": 8023, "shared_key": "secretAB", "enabled": true}
-  ]
-}
-"""
-
 DB_PATH = "bbs.sqlite"
 CONFIG_PATH = "bbs_config.json"
-
 WELCOME_PATH = "welcome.txt"
 MOTD_PATH = "motd.txt"
 INFO_PATH = "info.txt"
@@ -146,7 +113,6 @@ def _ensure_text_files(cfg: "BBSConfig"):
             "Message of the day:",
             "Retro telnet BBS in Python.",
             "T or C for convers, /EX to leave.",
-            "Try: SB to post a bulletin.",
             "73",
             ""
         ])
