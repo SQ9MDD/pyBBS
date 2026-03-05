@@ -1266,6 +1266,7 @@ def _store_forward_message(fields: dict[str, str], body: str) -> tuple[bool, str
         con.close()
         return False, "duplicate"
 
+    relay_neighbors: list[str] = []
     if msg_type == "P":
         if recipient_bbs and recipient_bbs != LOCAL_BBS_NAME:
             con.close()
@@ -1287,9 +1288,17 @@ def _store_forward_message(fields: dict[str, str], body: str) -> tuple[bool, str
             """,
             (bid, scope, sender, subject, body, _path_append(path, LOCAL_BBS_NAME), created_at),
         )
+        mid = con.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+        visited = {p.strip().upper() for p in _path_append(path, LOCAL_BBS_NAME).split(",") if p.strip()}
+        relay_neighbors = [nei["name"] for nei in enabled_neighbors() if nei["name"] not in visited]
 
     con.commit()
     con.close()
+
+    if msg_type == "B":
+        for nname in relay_neighbors:
+            outbox_enqueue(mid, nname, status="queued")
+
     return True, "ok"
 
 
