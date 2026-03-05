@@ -1313,30 +1313,38 @@ def topology_links_list() -> str:
     """).fetchall()
     con.close()
 
-    table_rows = []
+    # Aggregate directional observations into undirected physical links.
+    links: dict[tuple[str, str], dict[str, object]] = {}
     for r in rows:
+        src = normalize_bbs_name(r["src"] or "")
+        dst = normalize_bbs_name(r["dst"] or "")
+        if not src or not dst or src == dst:
+            continue
+        a, b = (src, dst) if src <= dst else (dst, src)
         via = normalize_bbs_name(r["via_neighbor"] or "")
         seen = parse_iso_dt(r["seen_at"])
         if via in down_neighbors:
             age_sec = 0 if not seen else int((now - seen).total_seconds())
-            status = "DOWN"
+            row_status = "DOWN"
         elif not seen:
             age_sec = 0
-            status = "UNK"
+            row_status = "UNK"
         else:
             age_sec = int((now - seen).total_seconds())
-            status = "ACTIVE" if age_sec <= ttl_sec else "DEAD"
-        table_rows.append([
-            normalize_bbs_name(r["src"] or ""),
-            normalize_bbs_name(r["dst"] or ""),
-            via,
-            fmt_age_short(age_sec),
-            status,
-        ])
+            row_status = "ACTIVE" if age_sec <= ttl_sec else "DEAD"
+
+        key = (a, b)
+        cur = links.get(key)
+        if cur is None or age_sec < int(cur["age_sec"]):
+            links[key] = {"age_sec": age_sec, "status": row_status}
+
+    table_rows = []
+    for (a, b), meta in sorted(links.items(), key=lambda it: (it[0][0], it[0][1])):
+        table_rows.append([a, b, fmt_age_short(int(meta["age_sec"])), str(meta["status"])])
     return _ui_table(
         "TOPOLOGY LINKS",
-        ["SRC", "DST", "VIA", "AGE", "STATUS"],
-        [12, 12, 12, 8, 8],
+        ["NODE_A", "NODE_B", "AGE", "STATUS"],
+        [16, 16, 8, 8],
         table_rows,
         "No topology links yet.",
     )
