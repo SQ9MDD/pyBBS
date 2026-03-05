@@ -692,6 +692,19 @@ def queue_ndn_for_message(msg_row: sqlite3.Row, reason: str):
     ndn_sender = f"MAILER-DAEMON@{LOCAL_BBS_NAME}"
     ndn_subj = f"NDN: {subj or '(no subject)'}"[:80]
     to_addr = f"{msg_row['recipient']}@{msg_row['recipient_bbs']}" if msg_row["recipient_bbs"] else msg_row["recipient"]
+    con = db()
+    existing = con.execute(
+        """
+        SELECT 1
+        FROM messages
+        WHERE msg_type = 'P' AND sender = ? AND subject = ? AND body LIKE ?
+        LIMIT 1
+        """,
+        (ndn_sender, ndn_subj, f"%Original BID: {msg_row['bid']}%"),
+    ).fetchone()
+    con.close()
+    if existing:
+        return
     ndn_body = (
         "Sorry, user does not exist on destination BBS.\n"
         f"Reason: {reason}\n"
@@ -2117,6 +2130,8 @@ async def forward_connect_and_push(neighbor: dict):
                     reject_reason = parts[3] if len(parts) >= 4 else ""
                     if r["msg_type"] == "P" and reject_reason == "no_such_user":
                         queue_ndn_for_message(r, reject_reason)
+                        outbox_mark_result(r["outbox_id"], "rejected", reason[:200])
+                        continue
                 outbox_mark_result(r["outbox_id"], "failed", reason[:200])
 
         await fwd_send_line(writer, f"{FORWARD_PROTO} BYE")
