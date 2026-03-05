@@ -57,6 +57,10 @@ class BBSConfig:
     forward_session_timeout_sec: int = 20
     forward_max_msgs_per_session: int = 50
     forward_max_body_bytes: int = 20000
+    forward_backfill_enabled: bool = True
+    forward_backfill_max_per_session: int = 200
+    bulletin_retention_days: int = 60
+    outbox_retention_days: int = 14
 
     def __post_init__(self):
         if self.scopes is None:
@@ -88,6 +92,10 @@ def _default_config_dict() -> dict:
         "forward_session_timeout_sec": 20,
         "forward_max_msgs_per_session": 50,
         "forward_max_body_bytes": 20000,
+        "forward_backfill_enabled": True,
+        "forward_backfill_max_per_session": 200,
+        "bulletin_retention_days": 60,
+        "outbox_retention_days": 14,
     }
 
 
@@ -528,16 +536,19 @@ def bid_exists(con: sqlite3.Connection, bid: str) -> bool:
     return row is not None
 
 
-def outbox_enqueue(msg_id: int, neighbor_name: str, status: str = "queued", last_error: str = ""):
+def outbox_enqueue(msg_id: int, neighbor_name: str, status: str = "queued", last_error: str = "") -> bool:
     con = db()
     nname = normalize_bbs_name(neighbor_name)
+    if not nname:
+        con.close()
+        return False
     row = con.execute(
         "SELECT id FROM outbox WHERE msg_id = ? AND neighbor_name = ? LIMIT 1",
         (msg_id, nname),
     ).fetchone()
     if row:
         con.close()
-        return
+        return False
     con.execute(
         """
         INSERT INTO outbox(msg_id, neighbor_name, status, last_try_at, try_count, last_error, created_at)
@@ -547,6 +558,7 @@ def outbox_enqueue(msg_id: int, neighbor_name: str, status: str = "queued", last
     )
     con.commit()
     con.close()
+    return True
 
 
 def outbox_mark_attempt(ob_id: int):
@@ -567,6 +579,64 @@ def outbox_mark_result(ob_id: int, status: str, last_error: str = ""):
     )
     con.commit()
     con.close()
+
+
+def _split_path_nodes(path: str) -> set[str]:
+    return {p.strip().upper() for p in (path or "").split(",") if p.strip()}
+
+
+def enqueue_missing_bulletins_for_neighbor(neighbor_name: str, remote_bids: set[str], max_add: int) -> int:
+    if max_add <= 0:
+        return 0
+    nname = normalize_bbs_name(neighbor_name)
+    con = db()
+    rows = con.execute("""
+        SELECT id, bid, path
+        FROM messages
+        WHERE msg_type = 'B'
+        ORDER BY id DESC
+    """).fetchall()
+    con.close()
+
+    added = 0
+    for r in rows:
+        if r["bid"] in remote_bids:
+            continue
+        if nname in _split_path_nodes(r["path"] or ""):
+            continue
+        if outbox_enqueue(int(r["id"]), nname, status="queued"):
+            added += 1
+            if added >= max_add:
+                break
+    return added
+
+
+def cleanup_retention():
+    con = db()
+    try:
+        b_days = int(CFG.bulletin_retention_days)
+        if b_days > 0:
+            cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=b_days)).isoformat(timespec="seconds")
+            old_msg_rows = con.execute(
+                "SELECT id FROM messages WHERE msg_type = 'B' AND created_at < ?",
+                (cutoff,),
+            ).fetchall()
+            old_msg_ids = [int(r["id"]) for r in old_msg_rows]
+            if old_msg_ids:
+                marks = ",".join("?" for _ in old_msg_ids)
+                con.execute(f"DELETE FROM outbox WHERE msg_id IN ({marks})", old_msg_ids)
+                con.execute(f"DELETE FROM messages WHERE id IN ({marks})", old_msg_ids)
+
+        o_days = int(CFG.outbox_retention_days)
+        if o_days > 0:
+            o_cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=o_days)).isoformat(timespec="seconds")
+            con.execute(
+                "DELETE FROM outbox WHERE status IN ('sent', 'failed') AND created_at < ?",
+                (o_cutoff,),
+            )
+        con.commit()
+    finally:
+        con.close()
 
 
 def enabled_neighbors() -> list[dict]:
@@ -1155,12 +1225,13 @@ async def send_bulletin_interactive(reader, writer, sess: Session):
 
     body = "\n".join(lines).strip() or "(empty)"
     bid = make_bid(sess.callsign)
+    sender = f"{sess.callsign}@{LOCAL_BBS_NAME}"
 
     con = db()
     con.execute("""
         INSERT INTO messages(bid, msg_type, scope, sender, recipient, recipient_bbs, subject, body, path, created_at)
         VALUES (?, 'B', ?, ?, 'ALL', NULL, ?, ?, ?, ?)
-    """, (bid, sc, sess.callsign, subj[:80], body, LOCAL_BBS_NAME, now_iso()))
+    """, (bid, sc, sender, subj[:80], body, LOCAL_BBS_NAME, now_iso()))
     mid = con.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
     for nei in enabled_neighbors():
         con.execute(
@@ -1447,12 +1518,7 @@ async def _fwd_read_bid_list(reader: asyncio.StreamReader) -> set[str]:
 
 async def forward_connect_and_push(neighbor: dict):
     nname = neighbor["name"]
-    rows = _outbox_rows_for_neighbor(nname, CFG.forward_max_msgs_per_session)
-    if not rows:
-        return
-
-    for r in rows:
-        outbox_mark_attempt(r["outbox_id"])
+    rows: list[sqlite3.Row] = []
 
     try:
         conn = asyncio.open_connection(neighbor["host"], neighbor["port"])
@@ -1483,6 +1549,23 @@ async def forward_connect_and_push(neighbor: dict):
         for sc in sorted({s.upper() for s in CFG.scopes} | {"ALL"}):
             await fwd_send_line(writer, f"{FORWARD_PROTO} LISTBID B {sc}")
             remote_b_bids |= await _fwd_read_bid_list(reader)
+
+        if CFG.forward_backfill_enabled:
+            added = enqueue_missing_bulletins_for_neighbor(
+                nname,
+                remote_b_bids,
+                int(CFG.forward_backfill_max_per_session),
+            )
+            if added > 0:
+                LOGGER.info("Backfill neighbor=%s queued=%s", nname, added)
+
+        rows = _outbox_rows_for_neighbor(nname, CFG.forward_max_msgs_per_session)
+        if not rows:
+            await fwd_send_line(writer, f"{FORWARD_PROTO} BYE")
+            return
+
+        for r in rows:
+            outbox_mark_attempt(r["outbox_id"])
 
         push_rows: list[sqlite3.Row] = []
         for r in rows:
@@ -1541,6 +1624,7 @@ async def forward_connect_and_push(neighbor: dict):
 async def forward_loop():
     while True:
         try:
+            cleanup_retention()
             if CFG.forward_enabled:
                 for nei in enabled_neighbors():
                     await forward_connect_and_push(nei)
@@ -1747,8 +1831,7 @@ async def main():
     server = await asyncio.start_server(handle_client, CFG.host, CFG.port)
     addrs = ", ".join(str(s.getsockname()) for s in server.sockets)
     print(f"{CFG.title} {CFG.version} listening on {addrs} as {CFG.bbs_callsign}")
-    if CFG.forward_enabled:
-        asyncio.create_task(forward_loop())
+    asyncio.create_task(forward_loop())
     async with server:
         await server.serve_forever()
 
