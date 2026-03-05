@@ -71,7 +71,7 @@ FORWARD_LINE_MAX = 1024
 class BBSConfig:
     host: str = "0.0.0.0"
     port: int = 8023
-    bbs_callsign: str = "N0CALL-11"
+    bbs_callsign: str = "N0CALL"
     title: str = "PY-BBS"
     version: str = "0.6"
     prompt_bbs: str = "bbs> "
@@ -102,7 +102,7 @@ def _default_config_dict() -> dict:
     return {
         "host": "0.0.0.0",
         "port": 8023,
-        "bbs_callsign": "SQ9MDD-11",
+        "bbs_callsign": "N0CALL",
         "title": "PY-BBS",
         "version": "0.6",
         "prompt_bbs": "bbs> ",

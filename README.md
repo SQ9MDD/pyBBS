@@ -50,7 +50,7 @@ Przykładowa konfiguracja:
 {
   "host": "0.0.0.0",
   "port": 8023,
-  "bbs_callsign": "SQ9MDD-11",
+  "bbs_callsign": "N0CALL",
   "title": "PY-BBS",
   "version": "0.6",
   "prompt_bbs": "bbs> ",
