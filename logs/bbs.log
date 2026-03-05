@@ -180,3 +180,51 @@
 2026-03-05 14:03:07,966 INFO __main__ forward_session_start peer=10.9.10.201:12381
 2026-03-05 14:03:08,240 INFO __main__ Forward session from SQ9MDD-11 accepted=0
 2026-03-05 14:03:08,315 INFO __main__ client_disconnected peer=10.9.10.201:12381 user=-
+2026-03-05 14:03:37,177 INFO __main__ client_connected peer=10.9.10.201:12428
+2026-03-05 14:03:37,216 INFO __main__ forward_session_start peer=10.9.10.201:12428
+2026-03-05 14:03:37,478 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 14:03:37,512 INFO __main__ client_disconnected peer=10.9.10.201:12428 user=-
+2026-03-05 14:04:38,003 INFO __main__ client_connected peer=10.9.10.201:12507
+2026-03-05 14:04:38,032 INFO __main__ forward_session_start peer=10.9.10.201:12507
+2026-03-05 14:04:38,271 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 14:04:38,298 INFO __main__ client_disconnected peer=10.9.10.201:12507 user=-
+2026-03-05 14:05:13,563 INFO __main__ cmd peer=127.0.0.1:55061 user=SQ9MDD cmd=CONNECTIONS args=
+2026-03-05 14:05:38,727 INFO __main__ client_connected peer=10.9.10.201:12607
+2026-03-05 14:05:38,764 INFO __main__ forward_session_start peer=10.9.10.201:12607
+2026-03-05 14:05:39,017 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 14:05:39,048 INFO __main__ client_disconnected peer=10.9.10.201:12607 user=-
+2026-03-05 14:06:39,471 INFO __main__ client_connected peer=10.9.10.201:12703
+2026-03-05 14:06:39,548 INFO __main__ forward_session_start peer=10.9.10.201:12703
+2026-03-05 14:06:39,786 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 14:06:39,813 INFO __main__ client_disconnected peer=10.9.10.201:12703 user=-
+2026-03-05 14:06:59,459 INFO __main__ cmd peer=127.0.0.1:55061 user=SQ9MDD cmd=L args=
+2026-03-05 14:07:02,561 INFO __main__ cmd peer=127.0.0.1:55061 user=SQ9MDD cmd=LS args=
+2026-03-05 14:07:08,886 INFO __main__ cmd peer=127.0.0.1:55061 user=SQ9MDD cmd=KS args=11
+2026-03-05 14:07:08,916 WARNING __main__ cmd_unknown peer=127.0.0.1:55061 user=SQ9MDD raw=ks 11
+2026-03-05 14:07:14,849 INFO __main__ cmd peer=127.0.0.1:55061 user=SQ9MDD cmd=KS args=11
+2026-03-05 14:07:14,898 WARNING __main__ cmd_unknown peer=127.0.0.1:55061 user=SQ9MDD raw=ks 11
+2026-03-05 14:07:17,543 INFO __main__ cmd peer=127.0.0.1:55061 user=SQ9MDD cmd=KS args=11
+2026-03-05 14:07:17,599 WARNING __main__ cmd_unknown peer=127.0.0.1:55061 user=SQ9MDD raw=ks 11
+2026-03-05 14:07:19,384 INFO __main__ cmd peer=127.0.0.1:55061 user=SQ9MDD cmd=KS args=11
+2026-03-05 14:07:19,415 WARNING __main__ cmd_unknown peer=127.0.0.1:55061 user=SQ9MDD raw=ks 11
+2026-03-05 14:07:23,137 INFO __main__ cmd peer=127.0.0.1:55061 user=SQ9MDD cmd=LS args=
+2026-03-05 14:07:24,689 INFO __main__ cmd peer=127.0.0.1:55061 user=SQ9MDD cmd=? args=
+2026-03-05 14:07:40,277 INFO __main__ client_connected peer=10.9.10.201:12793
+2026-03-05 14:07:40,313 INFO __main__ forward_session_start peer=10.9.10.201:12793
+2026-03-05 14:07:40,579 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 14:07:40,614 INFO __main__ client_disconnected peer=10.9.10.201:12793 user=-
+2026-03-05 14:08:05,141 INFO __main__ cmd peer=127.0.0.1:55061 user=SQ9MDD cmd=L args=
+2026-03-05 14:08:13,792 INFO __main__ cmd peer=127.0.0.1:55061 user=SQ9MDD cmd=R args=12
+2026-03-05 14:08:13,835 INFO __main__ mail_read user=SQ9MDD mid=12 bid=213115_SP5ME
+2026-03-05 14:08:41,049 INFO __main__ client_connected peer=10.9.10.201:12893
+2026-03-05 14:08:41,117 INFO __main__ forward_session_start peer=10.9.10.201:12893
+2026-03-05 14:08:41,422 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 14:08:41,466 INFO __main__ client_disconnected peer=10.9.10.201:12893 user=-
+2026-03-05 14:09:41,928 INFO __main__ client_connected peer=10.9.10.201:13043
+2026-03-05 14:09:41,986 INFO __main__ forward_session_start peer=10.9.10.201:13043
+2026-03-05 14:09:42,228 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 14:09:42,266 INFO __main__ client_disconnected peer=10.9.10.201:13043 user=-
+2026-03-05 14:10:42,757 INFO __main__ client_connected peer=10.9.10.201:13146
+2026-03-05 14:10:42,819 INFO __main__ forward_session_start peer=10.9.10.201:13146
+2026-03-05 14:10:43,080 INFO __main__ Forward session from SQ9MDD-11 accepted=0
+2026-03-05 14:10:43,116 INFO __main__ client_disconnected peer=10.9.10.201:13146 user=-

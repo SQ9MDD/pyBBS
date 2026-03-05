@@ -1404,6 +1404,9 @@ def topology_links_list() -> str:
             age_sec = int((now - seen).total_seconds())
             row_status = "ACTIVE" if age_sec <= ttl_sec else "DEAD"
 
+        # For direct local links, keep display direction as LOCAL -> NEIGHBOR.
+        if origin and dst == origin and src in NEIGHBORS_BY_NAME:
+            src, dst = dst, src
         key = (src, dst)
         cur = links.get(key)
         if cur is None or age_sec < int(cur["age_sec"]):
