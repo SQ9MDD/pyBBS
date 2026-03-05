@@ -265,6 +265,18 @@ def now_iso() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 
 
+def fmt_user_dt(value: str | None) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    try:
+        dt = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        # Fallback for unexpected formats: trim to common "YYYY-MM-DD HH:MM".
+        return raw.replace("T", " ")[:16]
+
+
 def make_bid(callsign: str) -> str:
     rnd = "".join(secrets.choice(string.digits) for _ in range(6))
     return f"{rnd}_{callsign.upper()}"
@@ -593,7 +605,10 @@ def heard_list(limit: int) -> str:
 
     out = ["HEARD LIST\r\n", "CALLSIGN CONN LAST_SEEN FIRST_SEEN\r\n"]
     for r in rows:
-        out.append(f"{r['callsign']} {r['connects']} {r['last_seen']} {r['first_seen']}\r\n")
+        out.append(
+            f"{r['callsign']} {r['connects']} "
+            f"{fmt_user_dt(r['last_seen'])} {fmt_user_dt(r['first_seen'])}\r\n"
+        )
     return "".join(out)
 
 
@@ -646,7 +661,10 @@ def users_list() -> str:
 
     out = ["USERS\r\n", "CALLSIGN NAME CREATED_AT\r\n"]
     for r in rows:
-        out.append(f"{r['callsign']} {normalize_name(r['name'] or '', r['callsign'])} {r['created_at']}\r\n")
+        out.append(
+            f"{r['callsign']} {normalize_name(r['name'] or '', r['callsign'])} "
+            f"{fmt_user_dt(r['created_at'])}\r\n"
+        )
     return "".join(out)
 
 
@@ -845,7 +863,7 @@ def list_inbox(callsign: str) -> str:
     out = ["ID N FROM SUBJECT DATE\r\n"]
     for r in rows:
         flag = " " if r["is_read"] else "*"
-        out.append(f"{r['mid']} {flag} {r['sender']} {r['subject']} {r['created_at']}\r\n")
+        out.append(f"{r['mid']} {flag} {r['sender']} {r['subject']} {fmt_user_dt(r['created_at'])}\r\n")
     return "".join(out)
 
 
@@ -866,7 +884,7 @@ def list_new(callsign: str) -> str:
 
     out = ["NEW MAIL\r\n", "ID FROM SUBJECT DATE\r\n"]
     for r in rows:
-        out.append(f"{r['mid']} {r['sender']} {r['subject']} {r['created_at']}\r\n")
+        out.append(f"{r['mid']} {r['sender']} {r['subject']} {fmt_user_dt(r['created_at'])}\r\n")
     return "".join(out)
 
 
@@ -892,7 +910,7 @@ def read_private_message(callsign: str, mid: int) -> str:
         f"From {row['sender']}\r\n"
         f"To {row['recipient']}\r\n"
         f"Subj {row['subject']}\r\n"
-        f"Date {row['created_at']}\r\n"
+        f"Date {fmt_user_dt(row['created_at'])}\r\n"
         "\r\n"
     )
     body = row["body"].replace("\n", "\r\n")
@@ -937,7 +955,7 @@ def list_sent(callsign: str) -> str:
 
     out = ["SENT MAIL\r\n", "ID TO SUBJECT DATE\r\n"]
     for r in rows:
-        out.append(f"{r['id']} {r['recipient']} {r['subject']} {r['created_at']}\r\n")
+        out.append(f"{r['id']} {r['recipient']} {r['subject']} {fmt_user_dt(r['created_at'])}\r\n")
     return "".join(out)
 
 
@@ -1077,7 +1095,7 @@ def list_bulletins(scope: str) -> str:
 
     out = [f"BULLETINS {scope}\r\n", "ID FROM SUBJECT DATE\r\n"]
     for r in rows:
-        out.append(f"{r['id']} {r['sender']} {r['subject']} {r['created_at']}\r\n")
+        out.append(f"{r['id']} {r['sender']} {r['subject']} {fmt_user_dt(r['created_at'])}\r\n")
     return "".join(out)
 
 
@@ -1098,7 +1116,7 @@ def read_bulletin(mid: int) -> str:
         f"From {row['sender']}\r\n"
         f"Scope {row['scope']}\r\n"
         f"Subj {row['subject']}\r\n"
-        f"Date {row['created_at']}\r\n"
+        f"Date {fmt_user_dt(row['created_at'])}\r\n"
         "\r\n"
     )
     body = row["body"].replace("\n", "\r\n")
