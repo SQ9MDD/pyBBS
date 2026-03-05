@@ -1034,15 +1034,7 @@ def _store_topology_for_source(src: str, neighbors: list[str], via_neighbor: str
 
 
 def refresh_local_topology():
-    nstatus = neighbor_status_map()
-    local_neighbors = []
-    for n in enabled_neighbors():
-        st = nstatus.get(n["name"])
-        # Keep links only for neighbors that are not explicitly DOWN.
-        if st and (st["state"] or "").upper() == "DOWN":
-            continue
-        local_neighbors.append(n["name"])
-    _store_topology_for_source(LOCAL_BBS_NAME, local_neighbors, LOCAL_BBS_NAME)
+    _store_topology_for_source(LOCAL_BBS_NAME, netinfo_neighbors(), LOCAL_BBS_NAME)
 
 
 def route_map() -> dict[str, dict]:
@@ -1181,6 +1173,17 @@ def neighbor_status_map() -> dict[str, sqlite3.Row]:
 
 def enabled_neighbors() -> list[dict]:
     return [n for n in NEIGHBORS_BY_NAME.values() if n.get("enabled")]
+
+
+def netinfo_neighbors() -> list[str]:
+    nstatus = neighbor_status_map()
+    out: list[str] = []
+    for n in enabled_neighbors():
+        st = nstatus.get(n["name"])
+        if st and (st["state"] or "").upper() == "DOWN":
+            continue
+        out.append(n["name"])
+    return out
 
 
 def bump_heard(callsign: str):
@@ -2148,8 +2151,8 @@ async def handle_forward_session(reader: asyncio.StreamReader, writer: asyncio.S
 
         if len(cmd) == 2 and cmd[0] == FORWARD_PROTO and cmd[1] == "NETINFO":
             await fwd_send_line(writer, f"NODE:{LOCAL_BBS_NAME}")
-            for nei in sorted(enabled_neighbors(), key=lambda n: n["name"]):
-                await fwd_send_line(writer, f"NEI:{nei['name']}")
+            for nei_name in sorted(netinfo_neighbors()):
+                await fwd_send_line(writer, f"NEI:{nei_name}")
             await fwd_send_line(writer, f"{FORWARD_PROTO} END")
             continue
 
