@@ -1,0 +1,10 @@
+____________________  _________
+\______   \______   \/   _____/
+ |    |  _/|    |  _/\_____  \ 
+ |    |   \|    |   \/        \
+ |______  /|______  /_______  /
+        \/        \/        \/ 
+Retro telnet BBS in Python.
+T or C for convers, /EX to leave.
+Try: SB to post a bulletin.
+73

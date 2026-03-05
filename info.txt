@@ -1,0 +1,6 @@
+BBS INFO
+Sysop: (set in info.txt)
+QTH: (set in info.txt)
+Locator: (set in info.txt)
+RF: (set in info.txt)
+Rules: be nice, no spam.
