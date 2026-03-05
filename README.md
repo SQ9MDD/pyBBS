@@ -97,7 +97,7 @@ Przykład:
 ### Komendy
 
 - ogólne: `HELP`, `WHO`, `MOTD`, `INFO`, `Q`, `BYE`
-- poczta: `L`, `LM`, `N`, `R`, `RM`, `RN`, `S`, `SP`, `RE`, `K`, `KM`, `LS`
+- poczta: `L`, `LM`, `N`, `R`, `RM`, `RN`, `S`, `SP`, `RE`, `K`, `KM`, `KS`, `LS`
 - biuletyny: `B`, `LB`, `RB`, `SB`
 - inne: `J`, `MH`, `MHEARD`, `H`, `CONNECTION`, `CONNECTED`, `CONN`, `TOPOLOGY`, `TOPOLOGY PRUNE <minutes>`, `USERS`, `C`, `T`, `TALK`, `/WHO`, `/EX`
 
@@ -172,7 +172,7 @@ See the JSON example in the PL section above (same fields/values apply).
 ### Commands
 
 - general: `HELP`, `WHO`, `MOTD`, `INFO`, `Q`, `BYE`
-- mail: `L`, `LM`, `N`, `R`, `RM`, `RN`, `S`, `SP`, `RE`, `K`, `KM`, `LS`
+- mail: `L`, `LM`, `N`, `R`, `RM`, `RN`, `S`, `SP`, `RE`, `K`, `KM`, `KS`, `LS`
 - bulletins: `B`, `LB`, `RB`, `SB`
 - other: `J`, `MH`, `MHEARD`, `H`, `CONNECTION`, `CONNECTED`, `CONN`, `TOPOLOGY`, `TOPOLOGY PRUNE <minutes>`, `USERS`, `C`, `T`, `TALK`, `/WHO`, `/EX`
 

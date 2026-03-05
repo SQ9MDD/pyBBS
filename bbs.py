@@ -369,6 +369,7 @@ def help_text() -> str:
         "S/SP             Send mail",
         "RE <id>          Reply",
         "K <id>/KM <id>   Delete from inbox",
+        "KS <id>          Delete from sent list",
         "LS               List sent mail",
         "",
         "[ BULLETINS ]",
@@ -462,6 +463,15 @@ def init_db():
         );
     """)
     con.execute("""
+        CREATE TABLE IF NOT EXISTS sent_hidden (
+            callsign TEXT NOT NULL,
+            msg_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(callsign, msg_id),
+            FOREIGN KEY(msg_id) REFERENCES messages(id)
+        );
+    """)
+    con.execute("""
         CREATE TABLE IF NOT EXISTS neighbor_status (
             neighbor_name TEXT PRIMARY KEY,
             state TEXT NOT NULL,
@@ -485,6 +495,7 @@ def init_db():
     """)
     con.execute("CREATE INDEX IF NOT EXISTS idx_outbox_neighbor_status_try ON outbox(neighbor_name, status, last_try_at);")
     con.execute("CREATE INDEX IF NOT EXISTS idx_topology_seen ON topology_edges(seen_at);")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_sent_hidden_callsign ON sent_hidden(callsign);")
 
     # Migration safety
     user_cols = _table_columns(con, "users")
@@ -1781,12 +1792,13 @@ def list_sent(callsign: str) -> str:
     sender_remote = f"{sender_local}@{LOCAL_BBS_NAME}"
     con = db()
     rows = con.execute("""
-        SELECT id, recipient, recipient_bbs, subject, created_at
-        FROM messages
-        WHERE msg_type = 'P' AND sender IN (?, ?)
+        SELECT m.id, m.recipient, m.recipient_bbs, m.subject, m.created_at
+        FROM messages m
+        LEFT JOIN sent_hidden sh ON sh.msg_id = m.id AND sh.callsign = ?
+        WHERE m.msg_type = 'P' AND m.sender IN (?, ?) AND sh.msg_id IS NULL
         ORDER BY id DESC
         LIMIT ?
-    """, (sender_local, sender_remote, CFG.max_sent_list)).fetchall()
+    """, (sender_local, sender_local, sender_remote, CFG.max_sent_list)).fetchall()
     con.close()
 
     table_rows = []
@@ -1807,6 +1819,39 @@ def list_sent(callsign: str) -> str:
         table_rows,
         "Sent mail empty.",
     )
+
+
+def delete_from_sent(callsign: str, mid: int) -> str:
+    sender_local = normalize_callsign(callsign)
+    sender_remote = f"{sender_local}@{LOCAL_BBS_NAME}"
+    con = db()
+    row = con.execute(
+        """
+        SELECT id
+        FROM messages
+        WHERE id = ? AND msg_type = 'P' AND sender IN (?, ?)
+        """,
+        (mid, sender_local, sender_remote),
+    ).fetchone()
+    if not row:
+        con.close()
+        LOGGER.warning("mail_sent_delete_failed user=%s mid=%s reason=not_found", sender_local, mid)
+        return "No such mail in sent list.\r\n"
+
+    cur = con.execute(
+        """
+        INSERT INTO sent_hidden(callsign, msg_id, created_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(callsign, msg_id) DO NOTHING
+        """,
+        (sender_local, mid, now_iso()),
+    )
+    con.commit()
+    con.close()
+    if cur.rowcount:
+        LOGGER.info("mail_sent_deleted user=%s mid=%s", sender_local, mid)
+        return "Deleted from sent list.\r\n"
+    return "Already deleted from sent list.\r\n"
 
 
 async def _compose_message(reader, writer, to_default: str | None, subject_default: str | None) -> tuple[str, str, str] | None:
@@ -2680,6 +2725,13 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                     await send(writer, "Usage: K <id>\r\n")
                     continue
                 await send(writer, delete_from_inbox(sess.callsign, int(parts[1])))
+                continue
+
+            if cmd == "KS":
+                if len(parts) < 2 or not parts[1].isdigit():
+                    await send(writer, "Usage: KS <id>\r\n")
+                    continue
+                await send(writer, delete_from_sent(sess.callsign, int(parts[1])))
                 continue
 
             if cmd == "S":
