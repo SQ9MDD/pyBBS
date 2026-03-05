@@ -234,39 +234,13 @@ ALIASES = {
 
     # Quit
     "BYE": "Q",
+
+    # Connection aliases
+    "CONNECTED": "CONNECTION",
+    "CONN": "CONNECTION",
 }
 
-HELP = (
-    "Commands:\r\n"
-    "HELP - show this help\r\n"
-    "WHO - show your callsign\r\n"
-    "MOTD - show message of the day\r\n"
-    "INFO - show BBS info\r\n"
-    "Q or BYE - quit\r\n"
-    "\r\n"
-    "Mail:\r\n"
-    "L or LM - list inbox\r\n"
-    "N - list new (unread)\r\n"
-    "R <id> or RM <id> - read mail\r\n"
-    "RN - read next unread\r\n"
-    "S or SP - send mail\r\n"
-    "RE <id> - reply to mail\r\n"
-    "K <id> or KM <id> - delete from inbox\r\n"
-    "LS - list sent mail\r\n"
-    "\r\n"
-    "Bulletins:\r\n"
-    "B [SCOPE] or LB - list bulletins\r\n"
-    "RB <id> - read bulletin\r\n"
-    "SB - send bulletin\r\n"
-    "\r\n"
-    "Other:\r\n"
-    "J or MH or MHEARD or H - heard list\r\n"
-    "CONNECTION - list configured neighbors\r\n"
-    "USERS - list registered users\r\n"
-    "C or T or TALK - convers mode\r\n"
-    "/EX - leave convers\r\n"
-    "/WHO - convers users\r\n"
-)
+UI_WIDTH = 78
 
 
 def now_iso() -> str:
@@ -283,6 +257,81 @@ def fmt_user_dt(value: str | None) -> str:
     except Exception:
         # Fallback for unexpected formats: trim to common "YYYY-MM-DD HH:MM".
         return raw.replace("T", " ")[:16]
+
+
+def _ui_fit(text: str, width: int) -> str:
+    s = str(text or "")
+    if width <= 0:
+        return ""
+    if len(s) <= width:
+        return s
+    if width <= 3:
+        return s[:width]
+    return s[: width - 3] + "..."
+
+
+def _ui_border() -> str:
+    return "+" + "-" * (UI_WIDTH - 2) + "+\r\n"
+
+
+def _ui_box_line(text: str = "") -> str:
+    inner = _ui_fit(text, UI_WIDTH - 4)
+    return f"| {inner.ljust(UI_WIDTH - 4)} |\r\n"
+
+
+def _ui_panel(title: str, body_lines: list[str] | None = None) -> str:
+    out = ["\r\n", _ui_border(), _ui_box_line(title), _ui_border()]
+    for line in (body_lines or []):
+        out.append(_ui_box_line(line))
+    out.append(_ui_border())
+    return "".join(out)
+
+
+def _ui_table(title: str, headers: list[str], widths: list[int], rows: list[list[str]], empty: str) -> str:
+    if not rows:
+        return _ui_panel(title, [empty])
+
+    head = " ".join(_ui_fit(headers[i], widths[i]).ljust(widths[i]) for i in range(len(headers)))
+    sep = " ".join("-" * widths[i] for i in range(len(headers)))
+    lines = [head, sep]
+    for row in rows:
+        lines.append(" ".join(_ui_fit(str(row[i]), widths[i]).ljust(widths[i]) for i in range(len(widths))))
+    return _ui_panel(title, lines)
+
+
+def help_text() -> str:
+    lines = [
+        "[ GENERAL ]",
+        "HELP/?           Show this help",
+        "WHO              Show your callsign",
+        "MOTD             Show message of the day",
+        "INFO             Show BBS info",
+        "Q/BYE            Quit",
+        "",
+        "[ MAIL ]",
+        "L/LM             List inbox",
+        "N                List unread mail",
+        "R <id>/RM <id>   Read mail",
+        "RN               Read next unread",
+        "S/SP             Send mail",
+        "RE <id>          Reply",
+        "K <id>/KM <id>   Delete from inbox",
+        "LS               List sent mail",
+        "",
+        "[ BULLETINS ]",
+        "B [SCOPE]/LB     List bulletins",
+        "RB <id>          Read bulletin",
+        "SB               Send bulletin",
+        "",
+        "[ OTHER ]",
+        "J/MH/MHEARD/H    Heard list",
+        "CONNECTION       List configured neighbors (CONNECTED/CONN)",
+        "USERS            List registered users",
+        "C/T/TALK         Convers mode",
+        "/WHO             Convers users",
+        "/EX              Leave convers",
+    ]
+    return _ui_panel(f"{CFG.title} COMMANDS", lines)
 
 
 def make_bid(callsign: str) -> str:
@@ -387,7 +436,8 @@ class Session:
         self.in_convers: bool = False
 
     def prompt(self) -> str:
-        return CFG.prompt_convers if self.in_convers else CFG.prompt_bbs
+        base = CFG.prompt_convers if self.in_convers else CFG.prompt_bbs
+        return f"[{LOCAL_BBS_NAME}] {base}"
 
 
 def normalize_callsign(s: str) -> str:
@@ -670,23 +720,25 @@ def heard_list(limit: int) -> str:
     """, (limit,)).fetchall()
     con.close()
 
-    if not rows:
-        return "Heard list empty.\r\n"
-
-    out = ["HEARD LIST\r\n", "CALLSIGN CONN LAST_SEEN FIRST_SEEN\r\n"]
+    table_rows = []
     for r in rows:
-        out.append(
-            f"{r['callsign']} {r['connects']} "
-            f"{fmt_user_dt(r['last_seen'])} {fmt_user_dt(r['first_seen'])}\r\n"
-        )
-    return "".join(out)
+        table_rows.append([
+            r["callsign"],
+            str(r["connects"]),
+            fmt_user_dt(r["last_seen"]),
+            fmt_user_dt(r["first_seen"]),
+        ])
+    return _ui_table(
+        "HEARD LIST",
+        ["CALLSIGN", "CONN", "LAST_SEEN", "FIRST_SEEN"],
+        [16, 4, 16, 16],
+        table_rows,
+        "No heard entries.",
+    )
 
 
 def connections_list() -> str:
     neighbors = sorted(NEIGHBORS_BY_NAME.values(), key=lambda n: n["name"])
-    if not neighbors:
-        return "No connections defined.\r\n"
-
     con = db()
     stats_rows = con.execute("""
         SELECT neighbor_name, status, COUNT(*) AS c
@@ -707,14 +759,25 @@ def connections_list() -> str:
         if st == "failed":
             bucket["failed"] += int(r["c"])
 
-    out = ["CONNECTIONS\r\n", "NAME HOST PORT EN QUEUED FAILED\r\n"]
+    table_rows = []
     for n in neighbors:
         nstats = stats.get(n["name"], {"queued": 0, "failed": 0})
         enabled = "Y" if n.get("enabled") else "N"
-        out.append(
-            f"{n['name']} {n['host']} {n['port']} {enabled} {nstats['queued']} {nstats['failed']}\r\n"
-        )
-    return "".join(out)
+        table_rows.append([
+            n["name"],
+            n["host"],
+            str(n["port"]),
+            enabled,
+            str(nstats["queued"]),
+            str(nstats["failed"]),
+        ])
+    return _ui_table(
+        "CONNECTIONS",
+        ["NAME", "HOST", "PORT", "EN", "QUEUED", "FAILED"],
+        [16, 20, 5, 2, 6, 6],
+        table_rows,
+        "No connections defined.",
+    )
 
 
 def users_list() -> str:
@@ -726,16 +789,20 @@ def users_list() -> str:
     """).fetchall()
     con.close()
 
-    if not rows:
-        return "No registered users.\r\n"
-
-    out = ["USERS\r\n", "CALLSIGN NAME CREATED_AT\r\n"]
+    table_rows = []
     for r in rows:
-        out.append(
-            f"{r['callsign']} {normalize_name(r['name'] or '', r['callsign'])} "
-            f"{fmt_user_dt(r['created_at'])}\r\n"
-        )
-    return "".join(out)
+        table_rows.append([
+            r["callsign"],
+            normalize_name(r["name"] or "", r["callsign"]),
+            fmt_user_dt(r["created_at"]),
+        ])
+    return _ui_table(
+        "REGISTERED USERS",
+        ["CALLSIGN", "NAME", "CREATED"],
+        [16, 24, 16],
+        table_rows,
+        "No registered users.",
+    )
 
 
 def _read_text_file(path: str) -> str:
@@ -927,14 +994,23 @@ def list_inbox(callsign: str) -> str:
     """, (callsign, CFG.max_inbox_list)).fetchall()
     con.close()
 
-    if not rows:
-        return "Inbox empty.\r\n"
-
-    out = ["ID N FROM SUBJECT DATE\r\n"]
+    table_rows = []
     for r in rows:
         flag = " " if r["is_read"] else "*"
-        out.append(f"{r['mid']} {flag} {r['sender']} {r['subject']} {fmt_user_dt(r['created_at'])}\r\n")
-    return "".join(out)
+        table_rows.append([
+            str(r["mid"]),
+            flag,
+            r["sender"],
+            r["subject"],
+            fmt_user_dt(r["created_at"]),
+        ])
+    return _ui_table(
+        "INBOX",
+        ["ID", "N", "FROM", "SUBJECT", "DATE"],
+        [5, 1, 18, 27, 16],
+        table_rows,
+        "Inbox empty.",
+    )
 
 
 def list_new(callsign: str) -> str:
@@ -949,13 +1025,21 @@ def list_new(callsign: str) -> str:
     """, (callsign, CFG.max_inbox_list)).fetchall()
     con.close()
 
-    if not rows:
-        return "No new mail.\r\n"
-
-    out = ["NEW MAIL\r\n", "ID FROM SUBJECT DATE\r\n"]
+    table_rows = []
     for r in rows:
-        out.append(f"{r['mid']} {r['sender']} {r['subject']} {fmt_user_dt(r['created_at'])}\r\n")
-    return "".join(out)
+        table_rows.append([
+            str(r["mid"]),
+            r["sender"],
+            r["subject"],
+            fmt_user_dt(r["created_at"]),
+        ])
+    return _ui_table(
+        "NEW MAIL",
+        ["ID", "FROM", "SUBJECT", "DATE"],
+        [5, 18, 29, 16],
+        table_rows,
+        "No new mail.",
+    )
 
 
 def read_private_message(callsign: str, mid: int) -> str:
@@ -969,22 +1053,23 @@ def read_private_message(callsign: str, mid: int) -> str:
 
     if not row:
         con.close()
-        return "No such mail in your inbox.\r\n"
+        return _ui_panel("MAIL", ["No such mail in your inbox."])
 
     con.execute("UPDATE inbox SET is_read = 1 WHERE callsign = ? AND msg_id = ?", (callsign, mid))
     con.commit()
     con.close()
 
-    hdr = (
-        f"Msg {row['id']} BID {row['bid']}\r\n"
-        f"From {row['sender']}\r\n"
-        f"To {row['recipient']}\r\n"
-        f"Subj {row['subject']}\r\n"
-        f"Date {fmt_user_dt(row['created_at'])}\r\n"
-        "\r\n"
+    hdr = _ui_panel(
+        f"MAIL #{row['id']} BID {row['bid']}",
+        [
+            f"From : {row['sender']}",
+            f"To   : {row['recipient']}",
+            f"Subj : {row['subject']}",
+            f"Date : {fmt_user_dt(row['created_at'])}",
+        ],
     )
     body = row["body"].replace("\n", "\r\n")
-    return hdr + body + "\r\n\r\n"
+    return hdr + body + "\r\n" + _ui_border()
 
 
 def next_unread_id(callsign: str) -> int | None:
@@ -1020,13 +1105,21 @@ def list_sent(callsign: str) -> str:
     """, (callsign, CFG.max_sent_list)).fetchall()
     con.close()
 
-    if not rows:
-        return "Sent mail empty.\r\n"
-
-    out = ["SENT MAIL\r\n", "ID TO SUBJECT DATE\r\n"]
+    table_rows = []
     for r in rows:
-        out.append(f"{r['id']} {r['recipient']} {r['subject']} {fmt_user_dt(r['created_at'])}\r\n")
-    return "".join(out)
+        table_rows.append([
+            str(r["id"]),
+            r["recipient"],
+            r["subject"],
+            fmt_user_dt(r["created_at"]),
+        ])
+    return _ui_table(
+        "SENT MAIL",
+        ["ID", "TO", "SUBJECT", "DATE"],
+        [5, 18, 29, 16],
+        table_rows,
+        "Sent mail empty.",
+    )
 
 
 async def _compose_message(reader, writer, to_default: str | None, subject_default: str | None) -> tuple[str, str, str] | None:
@@ -1160,13 +1253,21 @@ def list_bulletins(scope: str) -> str:
     """, (scope, CFG.max_bulletin_list)).fetchall()
     con.close()
 
-    if not rows:
-        return f"No bulletins for scope {scope}.\r\n"
-
-    out = [f"BULLETINS {scope}\r\n", "ID FROM SUBJECT DATE\r\n"]
+    table_rows = []
     for r in rows:
-        out.append(f"{r['id']} {r['sender']} {r['subject']} {fmt_user_dt(r['created_at'])}\r\n")
-    return "".join(out)
+        table_rows.append([
+            str(r["id"]),
+            r["sender"],
+            r["subject"],
+            fmt_user_dt(r["created_at"]),
+        ])
+    return _ui_table(
+        f"BULLETINS / {scope}",
+        ["ID", "FROM", "SUBJECT", "DATE"],
+        [5, 18, 29, 16],
+        table_rows,
+        f"No bulletins for scope {scope}.",
+    )
 
 
 def read_bulletin(mid: int) -> str:
@@ -1179,18 +1280,19 @@ def read_bulletin(mid: int) -> str:
     con.close()
 
     if not row:
-        return "No such bulletin.\r\n"
+        return _ui_panel("BULLETIN", ["No such bulletin."])
 
-    hdr = (
-        f"Bulletin {row['id']} BID {row['bid']}\r\n"
-        f"From {row['sender']}\r\n"
-        f"Scope {row['scope']}\r\n"
-        f"Subj {row['subject']}\r\n"
-        f"Date {fmt_user_dt(row['created_at'])}\r\n"
-        "\r\n"
+    hdr = _ui_panel(
+        f"BULLETIN #{row['id']} BID {row['bid']}",
+        [
+            f"From : {row['sender']}",
+            f"Scope: {row['scope']}",
+            f"Subj : {row['subject']}",
+            f"Date : {fmt_user_dt(row['created_at'])}",
+        ],
     )
     body = row["body"].replace("\n", "\r\n")
-    return hdr + body + "\r\n\r\n"
+    return hdr + body + "\r\n" + _ui_border()
 
 
 async def send_bulletin_interactive(reader, writer, sess: Session):
@@ -1700,7 +1802,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                 break
 
             if cmd in ("HELP", "?"):
-                await send(writer, HELP)
+                await send(writer, help_text())
                 continue
 
             if cmd == "WHO":
