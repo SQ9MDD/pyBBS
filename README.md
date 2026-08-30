@@ -2,7 +2,9 @@
 
 ## PL
 
-Lekki symulator klasycznego BBS-a (Bulletin Board System) po Telnet, napisany w Pythonie (`asyncio` + `sqlite`), ze stylem terminalowym inspirowanym retro/FBB.
+Działający proof of concept klasycznego packet-radio BBS-a, napisany w Pythonie (`asyncio` + `sqlite`) i inspirowany terminalami FBB. pyBBS udostępnia tę samą logikę BBS równolegle przez Telnet oraz prawdziwe połączenia AX.25 connected-mode prowadzone przez KISS TCP.
+
+Projekt nie jest już wyłącznie symulatorem interfejsu: logowanie, uwierzytelnianie, banner, komendy i rozłączanie zostały uruchomione i sprawdzone w rzeczywistej sesji AX.25. Nadal jest to projekt eksperymentalny/hobbystyczny, a nie gotowy system produkcyjny.
 
 ### Funkcje
 
@@ -18,11 +20,14 @@ Lekki symulator klasycznego BBS-a (Bulletin Board System) po Telnet, napisany w 
 - okresowy alive check sąsiadów (UP/DOWN, RTT)
 - auto NDN dla nieistniejącego odbiorcy (`no_such_user`)
 - równoległy dostęp AX.25 connected-mode przez natywne API `pypacket_backend.py`
+- wiele odizolowanych sesji AX.25 oraz niezależne sesje Telnet
+- okresowy beacon informujący o dostępie do BBS-u
 
 ### Wymagania
 
 - Python 3.10+ (zalecane 3.11+)
 - klient Telnet (`telnet`, `nc`, PuTTY)
+- dla AX.25: TNC lub proxy udostępniające KISS TCP
 
 Brak zewnętrznych zależności PIP.
 
@@ -34,6 +39,33 @@ telnet 127.0.0.1 8023
 ```
 
 Przy pierwszym logowaniu podajesz callsign, nazwę i hasło.
+
+### Instalacja na Alpine Linux (OpenRC)
+
+Uruchom jako `root`:
+
+```bash
+apk add --no-cache curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/SQ9MDD/pyBBS/main/install-alpine.sh | sh
+```
+
+Instalator pobiera bieżącą gałąź `main` do `/opt/pyBBS`, tworzy nieuprzywilejowanego użytkownika `pybbs` oraz instaluje i uruchamia usługi OpenRC `pybbs-backend` i `pybbs`. Ponowne uruchomienie instalatora aktualizuje kod, ale zachowuje konfigurację, bazę wiadomości oraz edytowalne teksty BBS.
+
+Po instalacji:
+
+```bash
+vi /opt/pyBBS/pypacket_terminal_config.json
+vi /opt/pyBBS/bbs_config.json
+rc-service pybbs-backend restart
+rc-service pybbs restart
+```
+
+Status i logi:
+
+```bash
+rc-service pybbs-backend status
+rc-service pybbs status
+tail -f /var/log/pyBBS/backend.log /var/log/pyBBS/pybbs.log
+```
 
 ### Konfiguracja (`bbs_config.json`)
 
@@ -91,7 +123,7 @@ python3 pypacket_backend.py
 python3 bbs.py
 ```
 
-Najpierw skonfiguruj endpoint KISS TCP w `pypacket_terminal_config.json`, a następnie ustaw `ax25.enabled` na `true` i właściwy znak BBS w `bbs_config.json`. BBS łączy się wyłącznie z natywnym API JSON Lines backendu (domyślnie `127.0.0.1:8010`). Niedostępny backend nie zatrzymuje serwera Telnet; konektor ponawia połączenie co 5 sekund. Wbudowana usługa tekstowa backendu również odpowiada na jego `station_callsign`, dlatego dla pyBBS należy pozostawić ten znak różny od `ax25.callsign` (sam znak BBS jest rejestrowany przez API).
+Najpierw skonfiguruj endpoint KISS TCP w `pypacket_terminal_config.json`, a następnie ustaw `ax25.enabled` na `true` i właściwy znak BBS w `bbs_config.json`. BBS łączy się wyłącznie z natywnym API JSON Lines backendu (domyślnie `127.0.0.1:8010`). Niedostępny backend nie zatrzymuje serwera Telnet; konektor ponawia połączenie co 5 sekund. Wbudowana usługa tekstowa backendu również odpowiada na jego `station_callsign`, dlatego dla pyBBS należy pozostawić ten znak różny od `ax25.callsign` (sam znak BBS jest rejestrowany przez API). Okresowy beacon może używać znaku BBS niezależnie przez ustawienie `beacon_callsign`.
 
 ### Routing i topologia
 
@@ -122,6 +154,9 @@ Najpierw skonfiguruj endpoint KISS TCP w `pypacket_terminal_config.json`, a nast
 ### Pliki
 
 - `bbs.py` - serwer i logika BBS
+- `ax25_connector.py` - adapter strumieniowy między pyBBS a natywnym API backendu
+- `pypacket_backend.py` - obsługa KISS i AX.25 connected-mode
+- `pypacket_terminal_config.json` - porty KISS TCP, beacon i ustawienia radiowe
 - `bbs_config.json` - konfiguracja runtime
 - `bbs.sqlite` - baza danych
 - `logs/bbs.log` - log zdarzeń (rotacja pliku, logowania, komendy, forwarding)
@@ -131,7 +166,9 @@ Najpierw skonfiguruj endpoint KISS TCP w `pypacket_terminal_config.json`, a nast
 
 ## EN
 
-Lightweight retro-style Telnet BBS simulator written in Python (`asyncio` + `sqlite`), inspired by classic FBB-like terminal workflows.
+A working proof of concept packet-radio BBS written in Python (`asyncio` + `sqlite`) and inspired by classic FBB terminal workflows. pyBBS exposes the same BBS logic concurrently through Telnet and real AX.25 connected-mode links carried over KISS TCP.
+
+This is no longer only a terminal UI simulator: login, authentication, banners, commands, and disconnect handling have been exercised over a real AX.25 session. It remains an experimental/hobby project rather than production infrastructure.
 
 ### Features
 
@@ -147,11 +184,14 @@ Lightweight retro-style Telnet BBS simulator written in Python (`asyncio` + `sql
 - periodic neighbor alive checks (UP/DOWN, RTT)
 - automatic NDN for unknown destination users (`no_such_user`)
 - parallel AX.25 connected-mode access through the native `pypacket_backend.py` API
+- multiple isolated AX.25 sessions alongside independent Telnet sessions
+- periodic beacon advertising BBS access
 
 ### Requirements
 
 - Python 3.10+ (3.11+ recommended)
 - Telnet client (`telnet`, `nc`, PuTTY)
+- for AX.25: a TNC or proxy exposing KISS TCP
 
 No external PIP dependencies.
 
@@ -163,6 +203,18 @@ telnet 127.0.0.1 8023
 ```
 
 On first login, provide callsign, display name, and password.
+
+### Alpine Linux installation (OpenRC)
+
+Run as `root`:
+
+```bash
+apk add --no-cache curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/SQ9MDD/pyBBS/main/install-alpine.sh | sh
+```
+
+The installer downloads the current `main` branch into `/opt/pyBBS`, creates an unprivileged `pybbs` user, and installs and starts the `pybbs-backend` and `pybbs` OpenRC services. Running it again updates application code while preserving configuration, the message database, and editable BBS text files.
+
+After installation, edit `/opt/pyBBS/pypacket_terminal_config.json` and `/opt/pyBBS/bbs_config.json`, then restart both services with `rc-service`.
 
 ### Configuration (`bbs_config.json`)
 
@@ -178,7 +230,7 @@ python3 pypacket_backend.py
 python3 bbs.py
 ```
 
-The BBS connects only to the backend's native JSON Lines API (default `127.0.0.1:8010`). If the backend is unavailable, Telnet remains available and the connector retries every five seconds. The backend's built-in text service also answers on its own `station_callsign`, so keep that callsign different from the BBS `ax25.callsign`; the connector registers the BBS callsign itself.
+The BBS connects only to the backend's native JSON Lines API (default `127.0.0.1:8010`). If the backend is unavailable, Telnet remains available and the connector retries every five seconds. The backend's built-in text service also answers on its own `station_callsign`, so keep that callsign different from the BBS `ax25.callsign`; the connector registers the BBS callsign itself. A periodic beacon can independently use the BBS callsign through `beacon_callsign`.
 
 ### Routing and topology
 
@@ -210,5 +262,5 @@ The BBS connects only to the backend's native JSON Lines API (default `127.0.0.1
 
 - Passwords are hashed, never stored in plain text.
 - Runtime logs are written to `logs/bbs.log` (with rotation).
-- This is a hobby/educational project, not production infrastructure.
+- This is a working proof of concept and hobby/educational project, not production infrastructure.
 - For public deployments, use network isolation and strong `shared_key` values.
