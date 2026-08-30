@@ -42,13 +42,13 @@ PRINT_LOCK = threading.Lock()
 # ============================================================================
 
 AGW_LISTEN_HOST = "0.0.0.0"
-AGW_LISTEN_PORT = 8000
+AGW_LISTEN_PORT = 9100
 
 # Native application API.
 # One JSON object per line (JSON Lines / NDJSON).
 # Bound to localhost by default because there is no authentication layer.
 API_LISTEN_HOST = "127.0.0.1"
-API_LISTEN_PORT = 8010
+API_LISTEN_PORT = 9101
 API_ENABLED = True
 
 # A GUI may disappear and reconnect without destroying radio sessions.

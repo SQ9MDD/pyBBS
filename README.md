@@ -109,7 +109,7 @@ Przykład:
     "enabled": false,
     "callsign": "N0CALL",
     "backend_host": "127.0.0.1",
-    "backend_port": 8010
+    "backend_port": 9101
   }
 }
 ```
@@ -123,7 +123,7 @@ python3 pypacket_backend.py
 python3 bbs.py
 ```
 
-Najpierw skonfiguruj endpoint KISS TCP w `pypacket_terminal_config.json`, a następnie ustaw `ax25.enabled` na `true` i właściwy znak BBS w `bbs_config.json`. BBS łączy się wyłącznie z natywnym API JSON Lines backendu (domyślnie `127.0.0.1:8010`). Niedostępny backend nie zatrzymuje serwera Telnet; konektor ponawia połączenie co 5 sekund. Wbudowana usługa tekstowa backendu również odpowiada na jego `station_callsign`, dlatego dla pyBBS należy pozostawić ten znak różny od `ax25.callsign` (sam znak BBS jest rejestrowany przez API). Okresowy beacon może używać znaku BBS niezależnie przez ustawienie `beacon_callsign`.
+Najpierw skonfiguruj endpoint KISS TCP w `pypacket_terminal_config.json`, a następnie ustaw `ax25.enabled` na `true` i właściwy znak BBS w `bbs_config.json`. BBS łączy się wyłącznie z natywnym API JSON Lines backendu (domyślnie `127.0.0.1:9101`). Lokalny serwer AGWPE backendu nasłuchuje na porcie `9100`. Niedostępny backend nie zatrzymuje serwera Telnet; konektor ponawia połączenie co 5 sekund. Wbudowana usługa tekstowa backendu również odpowiada na jego `station_callsign`, dlatego dla pyBBS należy pozostawić ten znak różny od `ax25.callsign` (sam znak BBS jest rejestrowany przez API). Okresowy beacon może używać znaku BBS niezależnie przez ustawienie `beacon_callsign`.
 
 ### Routing i topologia
 
@@ -230,7 +230,7 @@ python3 pypacket_backend.py
 python3 bbs.py
 ```
 
-The BBS connects only to the backend's native JSON Lines API (default `127.0.0.1:8010`). If the backend is unavailable, Telnet remains available and the connector retries every five seconds. The backend's built-in text service also answers on its own `station_callsign`, so keep that callsign different from the BBS `ax25.callsign`; the connector registers the BBS callsign itself. A periodic beacon can independently use the BBS callsign through `beacon_callsign`.
+The BBS connects only to the backend's native JSON Lines API (default `127.0.0.1:9101`). The backend's local AGWPE server listens on port `9100`. If the backend is unavailable, Telnet remains available and the connector retries every five seconds. The backend's built-in text service also answers on its own `station_callsign`, so keep that callsign different from the BBS `ax25.callsign`; the connector registers the BBS callsign itself. A periodic beacon can independently use the BBS callsign through `beacon_callsign`.
 
 ### Routing and topology
 

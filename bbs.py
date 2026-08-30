@@ -107,7 +107,7 @@ class BBSConfig:
                 "enabled": False,
                 "callsign": self.bbs_callsign,
                 "backend_host": "127.0.0.1",
-                "backend_port": 8010,
+                "backend_port": 9101,
             }
 
 
@@ -144,7 +144,7 @@ def _default_config_dict() -> dict:
             "enabled": False,
             "callsign": "N0CALL",
             "backend_host": "127.0.0.1",
-            "backend_port": 8010,
+            "backend_port": 9101,
         },
     }
 
@@ -2837,7 +2837,7 @@ async def main():
         )
         ax25 = AX25Connector(
             host=str(ax25_cfg.get("backend_host", "127.0.0.1")),
-            port=int(ax25_cfg.get("backend_port", 8010)),
+            port=int(ax25_cfg.get("backend_port", 9101)),
             callsign=ax25_callsign,
             session_handler=handle_client,
             logger=LOGGER,
