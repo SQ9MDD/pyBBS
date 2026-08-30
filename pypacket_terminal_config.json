@@ -1,0 +1,26 @@
+{
+  "ports": [
+    {
+      "name": "Radio KISS TCP",
+      "type": "kiss_tcp",
+      "host": "plwxsr.hamspirit.pl",
+      "port": 9999
+    }
+  ],
+  "local": "N0CAL",
+  "digi_callsign": "N0CAL",
+  "digi_enabled": false,
+  "digi_route_ttl": 3600,
+  "station_info": "",
+  "welcome_text": "",
+  "bye_text": "",
+  "mheard": {},
+  "beacon_dest": "BEACON",
+  "beacon_callsign": "PLWXSR",
+  "beacon_via": "",
+  "beacon_text": "PLWXSR PY-BBS - CONNECT PLWXSR",
+  "beacon_port_ids": [
+    "0"
+  ],
+  "beacon_interval_min": 10
+}

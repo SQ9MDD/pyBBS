@@ -276,7 +276,10 @@ class AX25Connector:
 
         if event == "disconnected":
             session = message.get("session") or {}
-            self._end_session(self._key(session))
+            self._end_session(
+                self._key(session),
+                reason=str(message.get("reason", "")).strip(),
+            )
 
     def _start_session(self, key: SessionKey):
         if key in self.sessions:
@@ -289,12 +292,15 @@ class AX25Connector:
         self.sessions[key] = _RadioSession(reader, writer, task)
         self.log.info("AX25: incoming %s -> %s port=%s", key[2], key[1], key[0])
 
-    def _end_session(self, key: SessionKey):
+    def _end_session(self, key: SessionKey, reason: str = ""):
         radio_session = self.sessions.pop(key, None)
         if radio_session is None:
             return
         radio_session.writer.remote_closed()
-        self.log.info("AX25: disconnected %s", key[2])
+        if reason:
+            self.log.info("AX25: disconnected %s reason=%s", key[2], reason)
+        else:
+            self.log.info("AX25: disconnected %s", key[2])
 
     def _end_all_sessions(self):
         for key in list(self.sessions):

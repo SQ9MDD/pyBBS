@@ -173,6 +173,7 @@ def load_digi_config():
         "bye_text": "",
         "mheard": {},
         "beacon_dest": "CQ",
+        "beacon_callsign": "N0CAL",
         "beacon_via": "",
         "beacon_text": "",
         "beacon_port_ids": [],
@@ -221,9 +222,17 @@ def load_digi_config():
         if isinstance(data.get("mheard"), dict):
             result["mheard"] = data["mheard"]
 
-        result["beacon_dest"] = normalize_call(
-            str(data.get("beacon_dest", "CQ"))
-        ) or "CQ"
+        # Bridge.__init__ normalizes this after normalize_call() is defined.
+        # This loader runs earlier during module import.
+        result["beacon_dest"] = (
+            str(data.get("beacon_dest", "CQ")).strip().upper()
+            or "CQ"
+        )
+        result["beacon_callsign"] = (
+            str(data.get("beacon_callsign", call or "N0CAL")).strip().upper()
+            or call
+            or "N0CAL"
+        )
         result["beacon_via"] = str(
             data.get("beacon_via", "")
         )
@@ -924,6 +933,9 @@ class Bridge:
         self.beacon_dest = normalize_call(
             DIGI_CONFIG.get("beacon_dest", "CQ")
         ) or "CQ"
+        self.beacon_callsign = normalize_call(
+            DIGI_CONFIG.get("beacon_callsign", self.station_callsign)
+        ) or self.station_callsign
         self.beacon_via = str(
             DIGI_CONFIG.get("beacon_via", "")
         )
@@ -1452,7 +1464,7 @@ class Bridge:
                     time.monotonic() + interval * 60
                 )
 
-                local = self.station_callsign
+                local = self.beacon_callsign
                 destination = self.beacon_dest
                 via = self.parse_beacon_via(self.beacon_via)
                 text = self.beacon_text
