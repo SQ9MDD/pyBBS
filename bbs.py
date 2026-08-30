@@ -13,6 +13,8 @@ import time
 from collections import deque
 from dataclasses import dataclass
 
+from ax25_connector import AX25Connector
+
 DB_PATH = "bbs.sqlite"
 CONFIG_PATH = "bbs_config.json"
 WELCOME_PATH = "welcome.txt"
@@ -93,12 +95,20 @@ class BBSConfig:
     outbox_retention_days: int = 14
     topology_edge_ttl_sec: int = 1800
     topology_edge_retention_sec: int = 86400
+    ax25: dict = None
 
     def __post_init__(self):
         if self.scopes is None:
             self.scopes = ["ALL", "EU", "POL"]
         if self.neighbors is None:
             self.neighbors = []
+        if self.ax25 is None:
+            self.ax25 = {
+                "enabled": False,
+                "callsign": self.bbs_callsign,
+                "backend_host": "127.0.0.1",
+                "backend_port": 8010,
+            }
 
 
 def _default_config_dict() -> dict:
@@ -130,6 +140,12 @@ def _default_config_dict() -> dict:
         "outbox_retention_days": 14,
         "topology_edge_ttl_sec": 1800,
         "topology_edge_retention_sec": 86400,
+        "ax25": {
+            "enabled": False,
+            "callsign": "N0CALL",
+            "backend_host": "127.0.0.1",
+            "backend_port": 8010,
+        },
     }
 
 
@@ -618,8 +634,8 @@ async def readline(
 
         b = raw[0]
 
-        # Strip telnet negotiation sequences from input stream.
-        if b == TELNET_IAC:
+        # Strip Telnet negotiation sequences only on the Telnet transport.
+        if b == TELNET_IAC and getattr(reader, "transport_type", "telnet") == "telnet":
             cmd = await reader.read(1)
             if not cmd:
                 READLINE_SKIP_LF.pop(rid, None)
@@ -721,6 +737,8 @@ async def read_hidden_input(reader: asyncio.StreamReader, writer: asyncio.Stream
 
 
 async def set_password_input_mode(writer: asyncio.StreamWriter, enabled: bool):
+    if getattr(writer, "transport_type", "telnet") != "telnet":
+        return
     try:
         if enabled:
             # Ask telnet client to disable local echo while password is typed.
@@ -1532,11 +1550,20 @@ def convers_users_text() -> str:
     return "Convers users:\r\n" + "\r\n".join(users) + "\r\n"
 
 
-async def login_flow(reader, writer, sess: Session, first_line: str | None = None, peer: str = "unknown"):
+async def login_flow(
+    reader,
+    writer,
+    sess: Session,
+    first_line: str | None = None,
+    peer: str = "unknown",
+    preset_callsign: str | None = None,
+):
     await send(writer, show_welcome() + "\r\n")
-    await send(writer, "Enter your callsign: ")
-
-    cs = first_line if first_line is not None else await readline(reader)
+    if preset_callsign is None:
+        await send(writer, "Enter your callsign: ")
+        cs = first_line if first_line is not None else await readline(reader)
+    else:
+        cs = preset_callsign
     if cs is None:
         LOGGER.info("login_aborted peer=%s reason=disconnect_before_callsign", peer)
         return False
@@ -2555,7 +2582,11 @@ async def forward_loop():
 
 # ---- Server ----
 
-async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+async def handle_client(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    preset_callsign: str | None = None,
+):
     sess = Session()
     SESSIONS_BY_WRITER[writer] = sess
     peer = peer_label(writer)
@@ -2563,17 +2594,25 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 
     try:
         first_line = None
-        try:
-            first_line = await asyncio.wait_for(readline(reader), timeout=2.0)
-        except asyncio.TimeoutError:
-            first_line = None
+        if preset_callsign is None:
+            try:
+                first_line = await asyncio.wait_for(readline(reader), timeout=2.0)
+            except asyncio.TimeoutError:
+                first_line = None
 
         if first_line and first_line.startswith(f"{FORWARD_PROTO} "):
             LOGGER.info("forward_session_start peer=%s", peer)
             await handle_forward_session(reader, writer, first_line)
             return
 
-        ok = await login_flow(reader, writer, sess, first_line=first_line, peer=peer)
+        ok = await login_flow(
+            reader,
+            writer,
+            sess,
+            first_line=first_line,
+            peer=peer,
+            preset_callsign=preset_callsign,
+        )
         if not ok:
             LOGGER.info("client_disconnected peer=%s reason=login_failed", peer)
             writer.close()
@@ -2791,6 +2830,19 @@ async def main():
     print(f"{CFG.title} {CFG.version} listening on {addrs} as {CFG.bbs_callsign}")
     LOGGER.info("server_listening addrs=%s bbs=%s", addrs, CFG.bbs_callsign)
     asyncio.create_task(forward_loop())
+    ax25_cfg = CFG.ax25 if isinstance(CFG.ax25, dict) else {}
+    if ax25_cfg.get("enabled", False):
+        ax25_callsign = normalize_callsign(
+            str(ax25_cfg.get("callsign") or CFG.bbs_callsign)
+        )
+        ax25 = AX25Connector(
+            host=str(ax25_cfg.get("backend_host", "127.0.0.1")),
+            port=int(ax25_cfg.get("backend_port", 8010)),
+            callsign=ax25_callsign,
+            session_handler=handle_client,
+            logger=LOGGER,
+        )
+        asyncio.create_task(ax25.run())
     async with server:
         await server.serve_forever()
 

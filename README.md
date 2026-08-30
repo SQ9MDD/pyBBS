@@ -17,6 +17,7 @@ Lekki symulator klasycznego BBS-a (Bulletin Board System) po Telnet, napisany w 
 - forwarding prywatnych wiadomości po wyliczonych trasach (hops)
 - okresowy alive check sąsiadów (UP/DOWN, RTT)
 - auto NDN dla nieistniejącego odbiorcy (`no_such_user`)
+- równoległy dostęp AX.25 connected-mode przez natywne API `pypacket_backend.py`
 
 ### Wymagania
 
@@ -71,9 +72,26 @@ Przykład:
   "bulletin_retention_days": 60,
   "outbox_retention_days": 14,
   "topology_edge_ttl_sec": 1800,
-  "topology_edge_retention_sec": 86400
+  "topology_edge_retention_sec": 86400,
+  "ax25": {
+    "enabled": false,
+    "callsign": "N0CALL",
+    "backend_host": "127.0.0.1",
+    "backend_port": 8010
+  }
 }
 ```
+
+### Dostęp AX.25
+
+Backend i BBS uruchamia się osobno:
+
+```bash
+python3 pypacket_backend.py
+python3 bbs.py
+```
+
+Najpierw skonfiguruj endpoint KISS TCP w `pypacket_terminal_config.json`, a następnie ustaw `ax25.enabled` na `true` i właściwy znak BBS w `bbs_config.json`. BBS łączy się wyłącznie z natywnym API JSON Lines backendu (domyślnie `127.0.0.1:8010`). Niedostępny backend nie zatrzymuje serwera Telnet; konektor ponawia połączenie co 5 sekund. Wbudowana usługa tekstowa backendu również odpowiada na jego `station_callsign`, dlatego dla pyBBS należy pozostawić ten znak różny od `ax25.callsign` (sam znak BBS jest rejestrowany przez API).
 
 ### Routing i topologia
 
@@ -128,6 +146,7 @@ Lightweight retro-style Telnet BBS simulator written in Python (`asyncio` + `sql
 - routed private mail forwarding via computed next hop (hop-based)
 - periodic neighbor alive checks (UP/DOWN, RTT)
 - automatic NDN for unknown destination users (`no_such_user`)
+- parallel AX.25 connected-mode access through the native `pypacket_backend.py` API
 
 ### Requirements
 
@@ -149,6 +168,17 @@ On first login, provide callsign, display name, and password.
 
 The file is auto-generated on first run.  
 See the JSON example in the PL section above (same fields/values apply).
+
+### AX.25 access
+
+Configure the KISS TCP endpoint in `pypacket_terminal_config.json`, enable the `ax25` block shown above, and start the two processes separately:
+
+```bash
+python3 pypacket_backend.py
+python3 bbs.py
+```
+
+The BBS connects only to the backend's native JSON Lines API (default `127.0.0.1:8010`). If the backend is unavailable, Telnet remains available and the connector retries every five seconds. The backend's built-in text service also answers on its own `station_callsign`, so keep that callsign different from the BBS `ax25.callsign`; the connector registers the BBS callsign itself.
 
 ### Routing and topology
 
